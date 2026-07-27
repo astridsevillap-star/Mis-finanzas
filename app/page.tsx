@@ -31,6 +31,14 @@ type CampoImportacion =
   | "tipo"
   | "fuente";
 type MapaColumnas = Record<CampoImportacion, string>;
+type ArchivoImportado = {
+  id: string;
+  nombre: string;
+  filas: FilaExcel[];
+  columnas: string[];
+  mapa: MapaColumnas;
+  positivosSon: Tipo;
+};
 
 const categorias = [
   "Pasajes",
@@ -59,16 +67,6 @@ const colores: Record<string, string> = {
   Extras: "#94a3b8",
 };
 const iniciales: Movimiento[] = [];
-const mapaVacio: MapaColumnas = {
-  fecha: "",
-  concepto: "",
-  monto: "",
-  cargo: "",
-  abono: "",
-  tipo: "",
-  fuente: "",
-};
-
 const soles = (n: number) =>
   new Intl.NumberFormat("es-PE", {
     style: "currency",
@@ -338,12 +336,8 @@ export default function Home() {
   const [busqueda, setBusqueda] = useState("");
   const [ocultar, setOcultar] = useState(false);
   const [cargado, setCargado] = useState(false);
-  const [nombreArchivo, setNombreArchivo] = useState("");
-  const [filasExcel, setFilasExcel] = useState<FilaExcel[]>([]);
-  const [columnasExcel, setColumnasExcel] = useState<string[]>([]);
-  const [mapaColumnas, setMapaColumnas] =
-    useState<MapaColumnas>(mapaVacio);
-  const [positivosSon, setPositivosSon] = useState<Tipo>("gasto");
+  const [archivosExcel, setArchivosExcel] = useState<ArchivoImportado[]>([]);
+  const [indiceArchivo, setIndiceArchivo] = useState(0);
   const [errorImportacion, setErrorImportacion] = useState("");
   const [borradores, setBorradores] = useState<MovimientoImportado[]>([]);
   const [indiceRevision, setIndiceRevision] = useState(0);
@@ -431,6 +425,11 @@ export default function Home() {
     .sort((a, b) => b.fecha.localeCompare(a.fecha));
 
   const actual = borradores[indiceRevision];
+  const archivoActivo = archivosExcel[indiceArchivo];
+  const totalFilasExcel = archivosExcel.reduce(
+    (total, archivo) => total + archivo.filas.length,
+    0,
+  );
   const totalAImportar = borradores.filter(
     (movimiento) => !movimiento.descartado,
   ).length;
@@ -468,10 +467,8 @@ export default function Home() {
   }
 
   function reiniciarImportacion() {
-    setNombreArchivo("");
-    setFilasExcel([]);
-    setColumnasExcel([]);
-    setMapaColumnas(mapaVacio);
+    setArchivosExcel([]);
+    setIndiceArchivo(0);
     setErrorImportacion("");
     setBorradores([]);
     setIndiceRevision(0);
@@ -484,53 +481,114 @@ export default function Home() {
     reiniciarImportacion();
   }
 
+  async function procesarArchivo(archivo: File): Promise<ArchivoImportado> {
+    let matriz: unknown[][];
+    if (archivo.name.toLowerCase().endsWith(".csv")) {
+      matriz = leerCsv(await archivo.text());
+    } else {
+      const { readSheet } = await import("read-excel-file/browser");
+      matriz = await readSheet(archivo);
+    }
+    if (matriz.length < 2) {
+      throw new Error("La primera hoja no contiene movimientos.");
+    }
+    const columnas = matriz[0].map((valor, indice, encabezados) => {
+      const base = String(valor ?? "").trim() || `Columna ${indice + 1}`;
+      const repeticiones = encabezados
+        .slice(0, indice)
+        .filter((anterior) => String(anterior ?? "").trim() === base).length;
+      return repeticiones ? `${base} (${repeticiones + 1})` : base;
+    });
+    const filas = matriz
+      .slice(1)
+      .filter((fila) =>
+        fila.some(
+          (valor) => valor !== null && valor !== undefined && valor !== "",
+        ),
+      )
+      .map((fila) =>
+        Object.fromEntries(
+          columnas.map((columna, indice) => [columna, fila[indice] ?? ""]),
+        ),
+      );
+    if (!filas.length) {
+      throw new Error("La primera hoja no contiene movimientos.");
+    }
+    return {
+      id: `${archivo.name}-${archivo.size}-${archivo.lastModified}`,
+      nombre: archivo.name,
+      filas,
+      columnas,
+      mapa: detectarMapa(columnas),
+      positivosSon: "gasto",
+    };
+  }
+
   async function cargarExcel(e: ChangeEvent<HTMLInputElement>) {
-    const archivo = e.target.files?.[0];
-    if (!archivo) return;
+    const seleccionados = Array.from(e.target.files || []);
+    if (!seleccionados.length) return;
     setErrorImportacion("");
 
-    try {
-      let matriz: unknown[][];
-      if (archivo.name.toLowerCase().endsWith(".csv")) {
-        matriz = leerCsv(await archivo.text());
-      } else {
-        const { readSheet } = await import("read-excel-file/browser");
-        matriz = await readSheet(archivo);
+    const idsExistentes = new Set(archivosExcel.map((archivo) => archivo.id));
+    const nuevos: ArchivoImportado[] = [];
+    const errores: string[] = [];
+    for (const archivo of seleccionados) {
+      const id = `${archivo.name}-${archivo.size}-${archivo.lastModified}`;
+      if (idsExistentes.has(id)) continue;
+      try {
+        const procesado = await procesarArchivo(archivo);
+        nuevos.push(procesado);
+        idsExistentes.add(id);
+      } catch {
+        errores.push(archivo.name);
       }
-      if (matriz.length < 2) {
-        throw new Error("La primera hoja no contiene movimientos.");
-      }
-      const columnas = matriz[0].map((valor, indice, encabezados) => {
-        const base = String(valor ?? "").trim() || `Columna ${indice + 1}`;
-        const repeticiones = encabezados
-          .slice(0, indice)
-          .filter((anterior) => String(anterior ?? "").trim() === base).length;
-        return repeticiones ? `${base} (${repeticiones + 1})` : base;
-      });
-      const filas = matriz
-        .slice(1)
-        .filter((fila) =>
-          fila.some(
-            (valor) => valor !== null && valor !== undefined && valor !== "",
-          ),
-        )
-        .map((fila) =>
-          Object.fromEntries(
-            columnas.map((columna, indice) => [columna, fila[indice] ?? ""]),
-          ),
-        );
-      if (!filas.length) {
-        throw new Error("La primera hoja no contiene movimientos.");
-      }
-      setNombreArchivo(archivo.name);
-      setFilasExcel(filas);
-      setColumnasExcel(columnas);
-      setMapaColumnas(detectarMapa(columnas));
-    } catch {
-      reiniciarImportacion();
+    }
+
+    if (nuevos.length) {
+      setIndiceArchivo(archivosExcel.length);
+      setArchivosExcel((anteriores) => [...anteriores, ...nuevos]);
+    }
+    if (errores.length) {
       setErrorImportacion(
-        "No pudimos leer el archivo. Verifica que sea un Excel (.xlsx) o CSV válido y que la primera fila contenga los encabezados.",
+        `No pudimos leer ${errores.join(", ")}. Verifica que cada archivo sea .xlsx o .csv y tenga encabezados en la primera fila.`,
       );
+    } else if (!nuevos.length) {
+      setErrorImportacion("Los archivos seleccionados ya fueron agregados.");
+    }
+    e.target.value = "";
+  }
+
+  function actualizarMapaActivo(campo: CampoImportacion, valor: string) {
+    if (!archivoActivo) return;
+    setArchivosExcel((anteriores) =>
+      anteriores.map((archivo, indice) =>
+        indice === indiceArchivo
+          ? { ...archivo, mapa: { ...archivo.mapa, [campo]: valor } }
+          : archivo,
+      ),
+    );
+  }
+
+  function actualizarPositivosActivo(valor: Tipo) {
+    setArchivosExcel((anteriores) =>
+      anteriores.map((archivo, indice) =>
+        indice === indiceArchivo
+          ? { ...archivo, positivosSon: valor }
+          : archivo,
+      ),
+    );
+  }
+
+  function quitarArchivo(id: string) {
+    const posicion = archivosExcel.findIndex((archivo) => archivo.id === id);
+    const restantes = archivosExcel.filter((archivo) => archivo.id !== id);
+    setArchivosExcel(restantes);
+    if (!restantes.length) {
+      setIndiceArchivo(0);
+    } else if (posicion < indiceArchivo) {
+      setIndiceArchivo(indiceArchivo - 1);
+    } else if (indiceArchivo >= restantes.length) {
+      setIndiceArchivo(restantes.length - 1);
     }
   }
 
@@ -540,19 +598,18 @@ export default function Home() {
 
   function prepararRevision() {
     setErrorImportacion("");
-    if (!mapaColumnas.fecha || !mapaColumnas.concepto) {
+    const indiceIncompleto = archivosExcel.findIndex(
+      (archivo) =>
+        !archivo.mapa.fecha ||
+        !archivo.mapa.concepto ||
+        (!archivo.mapa.monto &&
+          !archivo.mapa.cargo &&
+          !archivo.mapa.abono),
+    );
+    if (indiceIncompleto >= 0) {
+      setIndiceArchivo(indiceIncompleto);
       setErrorImportacion(
-        "Selecciona las columnas de fecha y descripción del movimiento.",
-      );
-      return;
-    }
-    if (
-      !mapaColumnas.monto &&
-      !mapaColumnas.cargo &&
-      !mapaColumnas.abono
-    ) {
-      setErrorImportacion(
-        "Selecciona una columna de monto o las columnas de cargo y abono.",
+        `Completa las columnas requeridas de ${archivosExcel[indiceIncompleto].nombre}: fecha, descripción y monto o cargos/abonos.`,
       );
       return;
     }
@@ -560,67 +617,69 @@ export default function Home() {
     const existentes = new Set(movimientos.map(claveMovimiento));
     const nuevasClaves = new Set<string>();
     let duplicados = 0;
+    let secuencia = 0;
     const baseId = Date.now();
-    const importados = filasExcel.flatMap((fila, indice) => {
-      const conceptoImportado = String(
-        valorFila(fila, mapaColumnas.concepto) ?? "",
-      ).trim();
-      const fechaImportada = fechaDesdeExcel(
-        valorFila(fila, mapaColumnas.fecha),
-      );
-      if (!conceptoImportado || !fechaImportada) return [];
+    const importados: MovimientoImportado[] = [];
+    for (const archivo of archivosExcel) {
+      const mapa = archivo.mapa;
+      for (const fila of archivo.filas) {
+        secuencia += 1;
+        const conceptoImportado = String(
+          valorFila(fila, mapa.concepto) ?? "",
+        ).trim();
+        const fechaImportada = fechaDesdeExcel(valorFila(fila, mapa.fecha));
+        if (!conceptoImportado || !fechaImportada) continue;
 
-      const cargo = numeroDesdeExcel(valorFila(fila, mapaColumnas.cargo));
-      const abono = numeroDesdeExcel(valorFila(fila, mapaColumnas.abono));
-      const montoUnico = numeroDesdeExcel(
-        valorFila(fila, mapaColumnas.monto),
-      );
-      let tipoImportado =
-        tipoDesdeTexto(valorFila(fila, mapaColumnas.tipo)) || positivosSon;
-      let montoImportado = Math.abs(montoUnico);
+        const cargo = numeroDesdeExcel(valorFila(fila, mapa.cargo));
+        const abono = numeroDesdeExcel(valorFila(fila, mapa.abono));
+        const montoUnico = numeroDesdeExcel(valorFila(fila, mapa.monto));
+        let tipoImportado =
+          tipoDesdeTexto(valorFila(fila, mapa.tipo)) || archivo.positivosSon;
+        let montoImportado = Math.abs(montoUnico);
 
-      if (mapaColumnas.cargo || mapaColumnas.abono) {
-        if (Math.abs(cargo) > 0) {
+        if (mapa.cargo || mapa.abono) {
+          if (Math.abs(cargo) > 0) {
+            tipoImportado = "gasto";
+            montoImportado = Math.abs(cargo);
+          } else if (Math.abs(abono) > 0) {
+            tipoImportado = "ingreso";
+            montoImportado = Math.abs(abono);
+          }
+        } else if (!mapa.tipo && montoUnico < 0) {
           tipoImportado = "gasto";
-          montoImportado = Math.abs(cargo);
-        } else if (Math.abs(abono) > 0) {
-          tipoImportado = "ingreso";
-          montoImportado = Math.abs(abono);
         }
-      } else if (!mapaColumnas.tipo && montoUnico < 0) {
-        tipoImportado = "gasto";
-      }
-      if (!montoImportado) return [];
+        if (!montoImportado) continue;
 
-      const fuenteImportada = normalizarFuente(
-        valorFila(fila, mapaColumnas.fuente),
-      );
-      const movimiento: MovimientoImportado = {
-        id: baseId + indice,
-        tipo: tipoImportado,
-        monto: montoImportado,
-        concepto: conceptoImportado,
-        categoria:
-          tipoImportado === "ingreso"
-            ? "Ingresos"
-            : sugerirCategoria(conceptoImportado),
-        fuente: fuenteImportada.fuente,
-        detalleFuente: fuenteImportada.detalle,
-        fecha: fechaImportada,
-      };
-      const clave = claveMovimiento(movimiento);
-      if (existentes.has(clave) || nuevasClaves.has(clave)) {
-        duplicados += 1;
-        return [];
+        const fuenteImportada = normalizarFuente(
+          valorFila(fila, mapa.fuente),
+        );
+        const movimiento: MovimientoImportado = {
+          id: baseId + secuencia,
+          tipo: tipoImportado,
+          monto: montoImportado,
+          concepto: conceptoImportado,
+          categoria:
+            tipoImportado === "ingreso"
+              ? "Ingresos"
+              : sugerirCategoria(conceptoImportado),
+          fuente: fuenteImportada.fuente,
+          detalleFuente: fuenteImportada.detalle,
+          fecha: fechaImportada,
+        };
+        const clave = claveMovimiento(movimiento);
+        if (existentes.has(clave) || nuevasClaves.has(clave)) {
+          duplicados += 1;
+          continue;
+        }
+        nuevasClaves.add(clave);
+        importados.push(movimiento);
       }
-      nuevasClaves.add(clave);
-      return [movimiento];
-    });
+    }
 
     if (!importados.length) {
       setErrorImportacion(
         duplicados
-          ? "Todos los movimientos del archivo ya están registrados."
+          ? "Todos los movimientos de los archivos ya están registrados."
           : "No encontramos filas válidas. Revisa las columnas seleccionadas y los formatos de fecha y monto.",
       );
       return;
@@ -1055,42 +1114,81 @@ export default function Home() {
             <span className="eyebrow">CARGA MASIVA</span>
             <h2>Importar movimientos</h2>
             <p>
-              El archivo se procesa en este dispositivo. Selecciona la primera
-              hoja y confirma qué representa cada columna.
+              Los archivos se procesan en este dispositivo. Puedes seleccionar
+              varios a la vez y confirmar el mapeo de cada uno.
             </p>
 
-            <label className={`file-drop ${nombreArchivo ? "loaded" : ""}`}>
+            <label
+              className={`file-drop ${archivosExcel.length ? "loaded" : ""}`}
+            >
               <input
                 ref={inputArchivo}
                 type="file"
                 accept=".xlsx,.csv"
+                multiple
                 onChange={cargarExcel}
               />
-              <span>{nombreArchivo ? "✓" : "⇧"}</span>
-              <b>{nombreArchivo || "Seleccionar Excel o CSV"}</b>
+              <span>{archivosExcel.length ? "＋" : "⇧"}</span>
+              <b>
+                {archivosExcel.length
+                  ? "Agregar más archivos"
+                  : "Seleccionar uno o varios archivos"}
+              </b>
               <small>
-                {filasExcel.length
-                  ? `${filasExcel.length} filas encontradas`
+                {archivosExcel.length
+                  ? `${archivosExcel.length} ${
+                      archivosExcel.length === 1 ? "archivo" : "archivos"
+                    } · ${totalFilasExcel} filas encontradas`
                   : "Formatos permitidos: .xlsx y .csv"}
               </small>
             </label>
 
-            {filasExcel.length > 0 && (
+            {archivosExcel.length > 0 && archivoActivo && (
               <>
+                <div className="file-tabs">
+                  {archivosExcel.map((archivo, indice) => (
+                    <div
+                      className={indice === indiceArchivo ? "active" : ""}
+                      key={archivo.id}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setIndiceArchivo(indice)}
+                      >
+                        <b>{archivo.nombre}</b>
+                        <small>{archivo.filas.length} filas</small>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Quitar ${archivo.nombre}`}
+                        onClick={() => quitarArchivo(archivo.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mapping-title">
+                  <div>
+                    <b>Mapeo de columnas</b>
+                    <span>{archivoActivo.nombre}</span>
+                  </div>
+                  <small>
+                    Archivo {indiceArchivo + 1} de {archivosExcel.length}
+                  </small>
+                </div>
                 <div className="mapping-grid">
                   <label>
                     Fecha *
                     <select
-                      value={mapaColumnas.fecha}
+                      value={archivoActivo.mapa.fecha}
                       onChange={(e) =>
-                        setMapaColumnas({
-                          ...mapaColumnas,
-                          fecha: e.target.value,
-                        })
+                        actualizarMapaActivo("fecha", e.target.value)
                       }
                     >
                       <option value="">Seleccionar columna</option>
-                      {columnasExcel.map((columna) => (
+                      {archivoActivo.columnas.map((columna) => (
                         <option key={columna}>{columna}</option>
                       ))}
                     </select>
@@ -1098,16 +1196,13 @@ export default function Home() {
                   <label>
                     Descripción *
                     <select
-                      value={mapaColumnas.concepto}
+                      value={archivoActivo.mapa.concepto}
                       onChange={(e) =>
-                        setMapaColumnas({
-                          ...mapaColumnas,
-                          concepto: e.target.value,
-                        })
+                        actualizarMapaActivo("concepto", e.target.value)
                       }
                     >
                       <option value="">Seleccionar columna</option>
-                      {columnasExcel.map((columna) => (
+                      {archivoActivo.columnas.map((columna) => (
                         <option key={columna}>{columna}</option>
                       ))}
                     </select>
@@ -1115,16 +1210,13 @@ export default function Home() {
                   <label>
                     Monto único
                     <select
-                      value={mapaColumnas.monto}
+                      value={archivoActivo.mapa.monto}
                       onChange={(e) =>
-                        setMapaColumnas({
-                          ...mapaColumnas,
-                          monto: e.target.value,
-                        })
+                        actualizarMapaActivo("monto", e.target.value)
                       }
                     >
                       <option value="">No aplica</option>
-                      {columnasExcel.map((columna) => (
+                      {archivoActivo.columnas.map((columna) => (
                         <option key={columna}>{columna}</option>
                       ))}
                     </select>
@@ -1132,16 +1224,13 @@ export default function Home() {
                   <label>
                     Cargo / débito
                     <select
-                      value={mapaColumnas.cargo}
+                      value={archivoActivo.mapa.cargo}
                       onChange={(e) =>
-                        setMapaColumnas({
-                          ...mapaColumnas,
-                          cargo: e.target.value,
-                        })
+                        actualizarMapaActivo("cargo", e.target.value)
                       }
                     >
                       <option value="">No aplica</option>
-                      {columnasExcel.map((columna) => (
+                      {archivoActivo.columnas.map((columna) => (
                         <option key={columna}>{columna}</option>
                       ))}
                     </select>
@@ -1149,16 +1238,13 @@ export default function Home() {
                   <label>
                     Abono / crédito
                     <select
-                      value={mapaColumnas.abono}
+                      value={archivoActivo.mapa.abono}
                       onChange={(e) =>
-                        setMapaColumnas({
-                          ...mapaColumnas,
-                          abono: e.target.value,
-                        })
+                        actualizarMapaActivo("abono", e.target.value)
                       }
                     >
                       <option value="">No aplica</option>
-                      {columnasExcel.map((columna) => (
+                      {archivoActivo.columnas.map((columna) => (
                         <option key={columna}>{columna}</option>
                       ))}
                     </select>
@@ -1166,16 +1252,13 @@ export default function Home() {
                   <label>
                     Tipo
                     <select
-                      value={mapaColumnas.tipo}
+                      value={archivoActivo.mapa.tipo}
                       onChange={(e) =>
-                        setMapaColumnas({
-                          ...mapaColumnas,
-                          tipo: e.target.value,
-                        })
+                        actualizarMapaActivo("tipo", e.target.value)
                       }
                     >
                       <option value="">No aplica</option>
-                      {columnasExcel.map((columna) => (
+                      {archivoActivo.columnas.map((columna) => (
                         <option key={columna}>{columna}</option>
                       ))}
                     </select>
@@ -1183,29 +1266,26 @@ export default function Home() {
                   <label>
                     Medio o cuenta
                     <select
-                      value={mapaColumnas.fuente}
+                      value={archivoActivo.mapa.fuente}
                       onChange={(e) =>
-                        setMapaColumnas({
-                          ...mapaColumnas,
-                          fuente: e.target.value,
-                        })
+                        actualizarMapaActivo("fuente", e.target.value)
                       }
                     >
                       <option value="">No aplica</option>
-                      {columnasExcel.map((columna) => (
+                      {archivoActivo.columnas.map((columna) => (
                         <option key={columna}>{columna}</option>
                       ))}
                     </select>
                   </label>
-                  {!mapaColumnas.tipo &&
-                    !mapaColumnas.cargo &&
-                    !mapaColumnas.abono && (
+                  {!archivoActivo.mapa.tipo &&
+                    !archivoActivo.mapa.cargo &&
+                    !archivoActivo.mapa.abono && (
                       <label>
                         Los montos positivos son
                         <select
-                          value={positivosSon}
+                          value={archivoActivo.positivosSon}
                           onChange={(e) =>
-                            setPositivosSon(e.target.value as Tipo)
+                            actualizarPositivosActivo(e.target.value as Tipo)
                           }
                         >
                           <option value="gasto">Gastos</option>
@@ -1217,16 +1297,17 @@ export default function Home() {
 
                 <div className="excel-preview">
                   <b>Vista previa</b>
-                  {filasExcel.slice(0, 3).map((fila, indice) => (
+                  {archivoActivo.filas.slice(0, 3).map((fila, indice) => (
                     <div key={indice}>
                       <span>
                         {String(
-                          valorFila(fila, mapaColumnas.fecha) || "Sin fecha",
+                          valorFila(fila, archivoActivo.mapa.fecha) ||
+                            "Sin fecha",
                         )}
                       </span>
                       <strong>
                         {String(
-                          valorFila(fila, mapaColumnas.concepto) ||
+                          valorFila(fila, archivoActivo.mapa.concepto) ||
                             "Sin descripción",
                         )}
                       </strong>
@@ -1234,9 +1315,9 @@ export default function Home() {
                         {String(
                           valorFila(
                             fila,
-                            mapaColumnas.monto ||
-                              mapaColumnas.cargo ||
-                              mapaColumnas.abono,
+                            archivoActivo.mapa.monto ||
+                              archivoActivo.mapa.cargo ||
+                              archivoActivo.mapa.abono,
                           ) || "Sin monto",
                         )}
                       </span>
@@ -1252,10 +1333,10 @@ export default function Home() {
             <button
               className="save"
               type="button"
-              disabled={!filasExcel.length}
+              disabled={!archivosExcel.length}
               onClick={prepararRevision}
             >
-              Revisar movimientos uno a uno
+              Revisar {totalFilasExcel} movimientos
             </button>
           </div>
         </div>
