@@ -843,7 +843,7 @@ export default function Home() {
             >
               <span>⇧</span>
               <b>Importar Excel</b>
-              <small>.xlsx, .xls o .csv</small>
+              <small>.xlsx o .csv</small>
             </button>
           </div>
         </section>
