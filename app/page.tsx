@@ -82,7 +82,7 @@ const paletaCategorias = ["#58c7a2", "#ff6b5f", "#9b7bf7", "#3e7bfa", "#f4b740",
 function colorCategoria(nombre: string, indice: number) {
   return colores[nombre] || paletaCategorias[indice % paletaCategorias.length];
 }
-const clasesTransferencia = ["Entre cuentas propias", "Aporte de capital", "Devolución de aporte", "Distribución de utilidades", "Ahorro o inversión"];
+const clasesTransferencia = ["Entre cuentas propias", "Aporte de capital", "Devolución de aporte", "Devolución de préstamo", "Distribución de utilidades", "Ahorro o inversión"];
 const colores: Record<string, string> = {
   Pasajes: "#58c7a2",
   Comida: "#ff6b5f",
@@ -368,6 +368,14 @@ function esPrestamoJair(movimiento: Movimiento) {
   return movimiento.tipo === "gasto" && sinAcentos(movimiento.concepto).includes("jair");
 }
 
+function esMovimientoJair(movimiento: Movimiento) {
+  return esPrestamoJair(movimiento) ||
+    (movimiento.tipo === "transferencia" &&
+      (movimiento.claseTransferencia === "Devolución de préstamo" ||
+        movimiento.cuentaOrigen === "Préstamos a Jair" ||
+        sinAcentos(movimiento.concepto).includes("jair")));
+}
+
 function normalizarDevolucionJair(movimiento: Movimiento): Movimiento {
   const esDevolucionRegistrada = movimiento.tipo !== "gasto" && movimiento.fecha === "2026-07-03" && movimiento.monto === 500 && sinAcentos(movimiento.concepto).includes("jair");
   if (!esDevolucionRegistrada) return movimiento;
@@ -411,6 +419,7 @@ export default function Home() {
   const [filtroFuente, setFiltroFuente] = useState("Todas");
   const [filtroMes, setFiltroMes] = useState("Todos");
   const [filtroEmpresa, setFiltroEmpresa] = useState("Todas");
+  const [soloJair, setSoloJair] = useState(false);
   const [vista, setVista] = useState<"inicio" | "movimientos" | "metas" | "presupuestos" | "reportes" | "ajustes">("inicio");
   const [presupuestos, setPresupuestos] = useState<Record<string, number>>({});
   const [presupuestosCargados, setPresupuestosCargados] = useState(false);
@@ -448,6 +457,7 @@ export default function Home() {
   const [nuevaEmpresa, setNuevaEmpresa] = useState("");
   const [empresaAjustes, setEmpresaAjustes] = useState("");
   const [nuevaCuenta, setNuevaCuenta] = useState("");
+  const [movimientoEditando, setMovimientoEditando] = useState<number | null>(null);
   const inputArchivo = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -964,6 +974,7 @@ export default function Home() {
         (filtroEmpresa === "Todas" || (movimiento.tipo === "transferencia"
           ? movimiento.empresaOrigen === filtroEmpresa || movimiento.empresaDestino === filtroEmpresa
           : movimiento.empresa === filtroEmpresa)) &&
+        (!soloJair || esMovimientoJair(movimiento)) &&
         movimiento.concepto.toLowerCase().includes(busqueda.toLowerCase()),
     )
     .sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -989,9 +1000,8 @@ export default function Home() {
     const detalleCalculado = detalleAutomatico(fuente);
     const cuentaSeleccionada = detalleCalculado || detalleFuente.trim() || fuente;
     const esDevolucionJair = tipo === "ingreso" && categoriaIngreso === "Devolución de préstamo";
-    setMovimientos((anteriores) => [
-      {
-        id: Date.now(),
+    const movimientoGuardado: Movimiento = {
+        id: movimientoEditando ?? Date.now(),
         tipo: esDevolucionJair ? "transferencia" : tipo,
         monto: valor,
         concepto: concepto.trim() || (esDevolucionJair ? "Devolución de préstamo de Jair" : tipo === "transferencia" ? "Transferencia propia" : "Sin concepto"),
@@ -1007,9 +1017,10 @@ export default function Home() {
         cuentaDestino: esDevolucionJair ? cuentaSeleccionada : tipo === "gasto" ? undefined : tipo === "transferencia" ? cuentaDestino : cuentaSeleccionada,
         claseTransferencia: esDevolucionJair ? "Devolución de préstamo" : tipo === "transferencia" ? claseTransferencia : undefined,
         excluirPresupuesto: tipo === "gasto" && categoria === "Pasajes" ? excluirPresupuesto : false,
-      },
-      ...anteriores,
-    ]);
+      };
+    setMovimientos((anteriores) => movimientoEditando === null
+      ? [movimientoGuardado, ...anteriores]
+      : anteriores.map((movimiento) => movimiento.id === movimientoEditando ? movimientoGuardado : movimiento));
     setMonto("");
     setConcepto("");
     setDetalleFuente("");
@@ -1022,6 +1033,33 @@ export default function Home() {
     setSubcategoria("Otros");
     setCategoriaIngreso("Sueldo");
     setFecha(hoy());
+    setMovimientoEditando(null);
+    setModal(false);
+  }
+
+  function editar(movimiento: Movimiento) {
+    setMovimientoEditando(movimiento.id);
+    setTipo(movimiento.tipo);
+    setMonto(String(movimiento.monto));
+    setConcepto(movimiento.concepto === "Sin concepto" ? "" : movimiento.concepto);
+    setCategoria(movimiento.tipo === "gasto" ? movimiento.categoria : categorias[0] || "Comida");
+    setCategoriaIngreso(movimiento.tipo === "ingreso" ? movimiento.categoria : "Sueldo");
+    setEmpresa(movimiento.empresa || "Personal");
+    setSubcategoria(movimiento.subcategoria || "Otros");
+    setFuente(movimiento.tipo === "transferencia" ? "Transferencia" : movimiento.fuente || "Otro");
+    setDetalleFuente(movimiento.tipo === "transferencia" ? "" : movimiento.detalleFuente || "");
+    setEmpresaOrigen(movimiento.empresaOrigen || movimiento.empresa || "Personal");
+    setEmpresaDestino(movimiento.empresaDestino || movimiento.empresa || "Personal");
+    setCuentaOrigen(movimiento.cuentaOrigen || movimiento.fuente || "BCP");
+    setCuentaDestino(movimiento.cuentaDestino || movimiento.detalleFuente || "IBK");
+    setClaseTransferencia(movimiento.claseTransferencia || "Entre cuentas propias");
+    setExcluirPresupuesto(Boolean(movimiento.excluirPresupuesto));
+    setFecha(movimiento.fecha);
+    setModal(true);
+  }
+
+  function cerrarModalMovimiento() {
+    setMovimientoEditando(null);
     setModal(false);
   }
 
@@ -1034,8 +1072,18 @@ export default function Home() {
   }
 
   function verDetalle(tipoDetalle: "Todos" | "Ingreso" | "Gasto" | "Transferencia", empresaDetalle?: Empresa | "Todas") {
+    setSoloJair(false);
     setFiltro(tipoDetalle);
     if (empresaDetalle) setFiltroEmpresa(empresaDetalle);
+    setVista("movimientos");
+  }
+
+  function verDetalleJair() {
+    setSoloJair(true);
+    setFiltro("Todos");
+    setFiltroEmpresa("Personal");
+    setFiltroFuente("Todas");
+    setBusqueda("");
     setVista("movimientos");
   }
 
@@ -1462,7 +1510,7 @@ export default function Home() {
         {vista !== "ajustes" && <div className="scope-bar card">
           {vista !== "metas" && vista !== "presupuestos" && vista !== "reportes" && <div><span>Unidad</span><select value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)}><option>Todas</option>{empresas.map((item) => <option key={item}>{item}</option>)}</select></div>}
           <div><span>Periodo</span><select value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)}><option value="Todos">Todos los meses</option>{mesesDisponibles.map((mes) => <option key={mes} value={mes}>{new Date(`${mes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</option>)}</select></div>
-          <button onClick={() => setModal(true)}>＋ Nuevo movimiento</button>
+          <button onClick={() => { setMovimientoEditando(null); setModal(true); }}>＋ Nuevo movimiento</button>
         </div>}
 
         {vista === "inicio" && <section className="financial-summary">
@@ -1474,7 +1522,7 @@ export default function Home() {
             <section>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Ingreso", "Personal"); }}>Ingresos del periodo <b>{soles(resumen.personal.ingresos)}</b></span>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Gasto", "Personal"); }}>Gastos reales <b>{soles(resumen.personal.gastos)}</b></span>
-              <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Transferencia", "Personal"); }}>Prestado a Jair <b>{soles(resumen.prestadoJair)}</b></span>
+              <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalleJair(); }}>Prestado a Jair <b>{soles(resumen.prestadoJair)}</b></span>
             </section>
           </article>
           <article className="card summary-unit sip-unit">
@@ -1845,6 +1893,7 @@ export default function Home() {
               ))}
             </div>
             <div className="movement-list">
+              {soloJair && <div className="active-detail-filter"><span>Mostrando únicamente movimientos de Jair</span><button onClick={() => setSoloJair(false)}>Ver todos</button></div>}
               {lista.length ? (
                 lista.map((movimiento) => (
                   <div className="movement" key={movimiento.id}>
@@ -1871,6 +1920,13 @@ export default function Home() {
                       {soles(movimiento.monto)}
                     </strong>
                     {movimiento.tipo === "gasto" && movimiento.categoria === "Pasajes" && <button className={`budget-flag ${movimiento.excluirPresupuesto ? "active" : ""}`} onClick={() => alternarPresupuesto(movimiento.id)}>{movimiento.excluirPresupuesto ? "Por encargo" : "Excluir de meta"}</button>}
+                    <button
+                      className="edit-movement"
+                      aria-label="Editar movimiento"
+                      onClick={() => editar(movimiento)}
+                    >
+                      Editar
+                    </button>
                     <button
                       className="delete"
                       aria-label="Eliminar"
@@ -1918,14 +1974,14 @@ export default function Home() {
       )}
 
       {modal && (
-        <div className="modal-backdrop" onMouseDown={() => setModal(false)}>
+        <div className="modal-backdrop" onMouseDown={cerrarModalMovimiento}>
           <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-            <button className="close" onClick={() => setModal(false)}>
+            <button className="close" onClick={cerrarModalMovimiento}>
               ×
             </button>
-            <span className="eyebrow">NUEVO REGISTRO</span>
-            <h2>Registrar movimiento</h2>
-            <p>Puedes cargar movimientos desde el 15 de junio de 2026.</p>
+            <span className="eyebrow">{movimientoEditando === null ? "NUEVO REGISTRO" : "EDITAR REGISTRO"}</span>
+            <h2>{movimientoEditando === null ? "Registrar movimiento" : "Modificar movimiento"}</h2>
+            <p>{movimientoEditando === null ? "Puedes cargar movimientos desde el 15 de junio de 2026." : "Los cambios actualizarán saldos, presupuestos y reportes."}</p>
             <form onSubmit={guardar}>
               <div className="type-toggle transfer-toggle">
                 <button
@@ -2099,7 +2155,7 @@ export default function Home() {
                 />
               </label>
               <button className="save" type="submit">
-                Guardar movimiento
+                {movimientoEditando === null ? "Guardar movimiento" : "Guardar cambios"}
               </button>
             </form>
           </div>
