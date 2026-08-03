@@ -50,9 +50,8 @@ const categorias = [
   "Suscripciones",
   "Ropa",
   "Extras",
-  "Jair",
 ];
-const detallesIngreso = ["BCP", "IBK", "SIP", "SS", "Otros"];
+const detallesIngreso = ["Sueldo", "SIP", "Jair", "SS", "Otros"];
 const fuentes = [
   "Yape",
   "Plin",
@@ -69,7 +68,6 @@ const colores: Record<string, string> = {
   Suscripciones: "#f4b740",
   Ropa: "#ee7fb2",
   Extras: "#94a3b8",
-  Jair: "#7aa6c2",
 };
 const iniciales: Movimiento[] = [];
 const soles = (n: number) =>
@@ -1270,18 +1268,35 @@ export default function Home() {
                   ))}
                 </select>
               </label>
-              <label>
-                Detalle de la fuente
-                <select
-                  value={detalleFuente}
-                  onChange={(e) => setDetalleFuente(e.target.value)}
-                >
-                  <option value="">Seleccionar</option>
-                  {detallesIngreso.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-              </label>
+              {tipo === "ingreso" ? (
+                <label>
+                  Detalle de la fuente
+                  <select
+                    value={detalleFuente}
+                    onChange={(e) => setDetalleFuente(e.target.value)}
+                  >
+                    <option value="">Seleccionar</option>
+                    {detallesIngreso.map((item) => (
+                      <option key={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label>
+                  {fuente === "Tarjeta"
+                    ? "¿Qué tarjeta utilizaste?"
+                    : "Detalle de la fuente (opcional)"}
+                  <input
+                    placeholder={
+                      fuente === "Tarjeta"
+                        ? "Ej. BCP Visa, Interbank, Ripley"
+                        : "Ej. Cuenta BCP, billetera personal"
+                    }
+                    value={detalleFuente}
+                    onChange={(e) => setDetalleFuente(e.target.value)}
+                  />
+                </label>
+              )}
               {tipo === "ingreso" && (
                 <label>
                   Concepto
