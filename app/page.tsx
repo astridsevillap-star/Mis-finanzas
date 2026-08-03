@@ -365,11 +365,11 @@ function cuentaMovimiento(movimiento: Movimiento) {
 }
 
 function esPrestamoJair(movimiento: Movimiento) {
-  return movimiento.tipo === "gasto" && movimiento.categoria === "Extras" && sinAcentos(movimiento.concepto).includes("jair");
+  return movimiento.tipo === "gasto" && sinAcentos(movimiento.concepto).includes("jair");
 }
 
 function normalizarDevolucionJair(movimiento: Movimiento): Movimiento {
-  const esDevolucionRegistrada = movimiento.tipo === "ingreso" && movimiento.fecha === "2026-07-03" && movimiento.monto === 500 && sinAcentos(movimiento.concepto).includes("jair");
+  const esDevolucionRegistrada = movimiento.tipo !== "gasto" && movimiento.fecha === "2026-07-03" && movimiento.monto === 500 && sinAcentos(movimiento.concepto).includes("jair");
   if (!esDevolucionRegistrada) return movimiento;
   const cuentaRecibida = movimiento.detalleFuente || cuentaMovimiento(movimiento) || "BCP";
   return {
@@ -451,6 +451,7 @@ export default function Home() {
   const inputArchivo = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (!authRevisada || !session) return;
     queueMicrotask(() => {
       const data = localStorage.getItem("mis-finanzas-movimientos");
       if (data) {
@@ -481,7 +482,7 @@ export default function Home() {
       }
       setCargado(true);
     });
-  }, []);
+  }, [authRevisada, session]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -492,6 +493,11 @@ export default function Home() {
       setSession(nuevaSession);
       setAuthRevisada(true);
       if (!nuevaSession) {
+        setMovimientos([]);
+        setPresupuestos({});
+        setCargado(false);
+        setPresupuestosCargados(false);
+        setConfiguracionLista(false);
         setNubeLista(false);
         setEstadoNube("Guardado en este dispositivo");
       }
@@ -533,8 +539,8 @@ export default function Home() {
       }));
       setMovimientos((locales) => {
         const combinados = new Map<number, Movimiento>();
-        remotos.forEach((item) => combinados.set(item.id, item));
         locales.forEach((item) => combinados.set(item.id, item));
+        remotos.forEach((item) => combinados.set(item.id, item));
         return Array.from(combinados.values());
       });
       setNubeLista(true);
@@ -545,10 +551,7 @@ export default function Home() {
   }, [session, cargado, nubeLista]);
 
   useEffect(() => {
-    if (!session) {
-      setConfiguracionLista(false);
-      return;
-    }
+    if (!session) return;
     let activo = true;
     async function cargarConfiguracion() {
       const [categoriasRes, subcategoriasRes, fuentesRes, empresasRes, cuentasRes] = await Promise.all([
@@ -603,7 +606,7 @@ export default function Home() {
 
   useEffect(() => {
     if (empresasState.length && !empresasState.includes(empresaAjustes)) {
-      setEmpresaAjustes(empresasState[0]);
+      queueMicrotask(() => setEmpresaAjustes(empresasState[0]));
     }
   }, [empresasState, empresaAjustes]);
 
@@ -714,7 +717,7 @@ export default function Home() {
         empresa_destino: item.empresaDestino || (item.tipo !== "gasto" ? item.empresa : null),
         cuenta_origen: item.cuentaOrigen || (item.tipo !== "ingreso" ? cuentaMovimiento(item) : null),
         cuenta_destino: item.cuentaDestino || (item.tipo === "transferencia" ? item.detalleFuente || null : item.tipo === "ingreso" ? cuentaMovimiento(item) : null),
-        clase_transferencia: item.claseTransferencia || (item.tipo === "transferencia" ? "Entre cuentas propias" : null),
+        clase_transferencia: item.claseTransferencia || null,
         excluir_presupuesto: item.excluirPresupuesto || false,
         updated_at: new Date().toISOString(),
       }));
@@ -735,15 +738,16 @@ export default function Home() {
   }, [movimientos, session, nubeLista]);
 
   useEffect(() => {
-    if (cargado) {
+    if (session && cargado) {
       localStorage.setItem(
         "mis-finanzas-movimientos",
         JSON.stringify(movimientos),
       );
     }
-  }, [movimientos, cargado]);
+  }, [movimientos, cargado, session]);
 
   useEffect(() => {
+    if (!session) return;
     queueMicrotask(() => {
       const data = localStorage.getItem("mis-finanzas-presupuestos");
       if (data) {
@@ -755,16 +759,16 @@ export default function Home() {
       }
       setPresupuestosCargados(true);
     });
-  }, []);
+  }, [session]);
 
   useEffect(() => {
-    if (presupuestosCargados) {
+    if (session && presupuestosCargados) {
       localStorage.setItem(
         "mis-finanzas-presupuestos",
         JSON.stringify(presupuestos),
       );
     }
-  }, [presupuestos, presupuestosCargados]);
+  }, [presupuestos, presupuestosCargados, session]);
 
   function actualizarPresupuesto(categoriaNombre: string, valor: string) {
     const numero = Number(valor);
