@@ -358,6 +358,23 @@ function detalleAutomatico(fuente: string) {
   return automaticos[fuente] || "";
 }
 
+function Sparkline({ series }: { series: { valores: number[]; color: string }[] }) {
+  const todos = series.flatMap((serie) => serie.valores);
+  if (!todos.length) return null;
+  const max = Math.max(...todos, 0);
+  const min = Math.min(...todos, 0);
+  const rango = max - min || 1;
+  return (
+    <svg className="sparkline" viewBox="0 0 100 34" preserveAspectRatio="none">
+      {series.map((serie, indiceSerie) => {
+        const paso = serie.valores.length > 1 ? 100 / (serie.valores.length - 1) : 0;
+        const puntos = serie.valores.map((valor, indice) => `${indice * paso},${30 - ((valor - min) / rango) * 28}`).join(" ");
+        return <polyline key={indiceSerie} points={puntos} fill="none" stroke={serie.color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />;
+      })}
+    </svg>
+  );
+}
+
 function cuentaMovimiento(movimiento: Movimiento) {
   const detalle = movimiento.detalleFuente?.trim();
   return detalle && ["Yape", "Plin", "Transferencia"].includes(movimiento.fuente)
@@ -917,9 +934,9 @@ export default function Home() {
 
   const avancePresupuestos = useMemo(() => {
     const movimientosMes = movimientos.filter(
-      (item) => item.tipo === "gasto" && !esPrestamoJair(item) && !item.excluirPresupuesto && item.fecha.startsWith(mesPresupuesto),
+      (item) => item.tipo === "gasto" && item.empresa === "Personal" && !esPrestamoJair(item) && !item.excluirPresupuesto && item.fecha.startsWith(mesPresupuesto),
     );
-    return categorias.map((nombre) => {
+    const detalle = categorias.map((nombre) => {
       const gastado = movimientosMes
         .filter((item) => item.categoria === nombre)
         .reduce((total, item) => total + item.monto, 0);
@@ -931,6 +948,9 @@ export default function Home() {
         porcentaje: limite ? (gastado / limite) * 100 : 0,
       };
     });
+    const totalLimite = detalle.reduce((total, item) => total + item.limite, 0);
+    const totalGastado = detalle.reduce((total, item) => total + item.gastado, 0);
+    return { detalle, totalLimite, totalGastado, totalPorcentaje: totalLimite ? (totalGastado / totalLimite) * 100 : 0 };
   }, [movimientos, presupuestos, mesPresupuesto, categorias]);
 
   const reporteMensual = useMemo(() => {
@@ -1465,12 +1485,30 @@ export default function Home() {
           <button onClick={() => setModal(true)}>＋ Nuevo movimiento</button>
         </div>}
 
+        {vista === "inicio" && reporteMensual.meses.length > 1 && <article className="card trend-strip">
+          <div>
+            <span className="eyebrow">TENDENCIA · ÚLTIMOS {reporteMensual.meses.length} MESES</span>
+            <div className="trend-strip-numbers">
+              <span><i className="dot ingreso" />Ingresos <b>{soles(reporteMensual.meses[reporteMensual.meses.length - 1].ingresos)}</b></span>
+              <span><i className="dot gasto" />Gastos <b>{soles(reporteMensual.meses[reporteMensual.meses.length - 1].gastos)}</b></span>
+            </div>
+          </div>
+          <Sparkline series={[
+            { valores: reporteMensual.meses.map((item) => item.ingresos), color: "var(--green)" },
+            { valores: reporteMensual.meses.map((item) => item.gastos), color: "var(--coral)" },
+          ]} />
+        </article>}
+
         {vista === "inicio" && <section className="financial-summary">
           <article className="card summary-unit personal-unit" onClick={() => setFiltroEmpresa("Personal")}>
             <div><span className="unit-icon">P</span><span className="eyebrow">FINANZAS PERSONALES</span></div>
             <h2>Personal</h2>
             <strong>{ocultar ? "S/ ••••••" : soles(resumen.disponiblePersonal)}</strong>
-            <p>Dinero personal disponible, sin SIP ni préstamos por cobrar.</p>
+            <p>Disponible, sin SIP ni préstamos por cobrar.</p>
+            <div className="mini-compare">
+              <i className="ingreso" style={{ width: `${Math.max(4, (resumen.personal.ingresos / Math.max(resumen.personal.ingresos, resumen.personal.gastos, 1)) * 100)}%` }} />
+              <i className="gasto" style={{ width: `${Math.max(4, (resumen.personal.gastos / Math.max(resumen.personal.ingresos, resumen.personal.gastos, 1)) * 100)}%` }} />
+            </div>
             <section>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Ingreso", "Personal"); }}>Ingresos del periodo <b>{soles(resumen.personal.ingresos)}</b></span>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Gasto", "Personal"); }}>Gastos reales <b>{soles(resumen.personal.gastos)}</b></span>
@@ -1493,7 +1531,11 @@ export default function Home() {
             <div><span className="unit-icon">{unidad.nombre.slice(0, 1)}</span><span className="eyebrow">NEGOCIO INDEPENDIENTE</span></div>
             <h2>{unidad.nombre}</h2>
             <strong>{ocultar ? "S/ ••••••" : soles(unidad.balance)}</strong>
-            <p>Cuenta y operación separada de sus finanzas personales.</p>
+            <p>Operación independiente de lo personal.</p>
+            <div className="mini-compare">
+              <i className="ingreso" style={{ width: `${Math.max(4, (unidad.ingresos / Math.max(unidad.ingresos, unidad.gastos, 1)) * 100)}%` }} />
+              <i className="gasto" style={{ width: `${Math.max(4, (unidad.gastos / Math.max(unidad.ingresos, unidad.gastos, 1)) * 100)}%` }} />
+            </div>
             <section>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Ingreso", unidad.nombre as Empresa); }}>Ventas <b>{soles(unidad.ingresos)}</b></span>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Gasto", unidad.nombre as Empresa); }}>Compras y egresos <b>{soles(unidad.gastos)}</b></span>
@@ -1637,13 +1679,30 @@ export default function Home() {
                 <h2>Presupuesto de {new Date(`${mesPresupuesto}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</h2>
               </div>
             </div>
-            <p className="budgets-hint">Define cuánto quieres gastar como máximo en cada categoría este mes. Se guarda en este dispositivo; déjalo en 0 para no controlar esa categoría.</p>
+            <p className="budgets-hint">Solo considera gastos de la unidad Personal. Define cuánto quieres gastar como máximo en cada categoría este mes; déjalo en 0 para no controlar esa categoría.</p>
+
+            {avancePresupuestos.totalLimite > 0 && (
+              <div className="budget-overview">
+                <div
+                  className="budget-ring"
+                  style={{ "--pct": `${Math.min(100, avancePresupuestos.totalPorcentaje)}%`, "--ring-color": avancePresupuestos.totalPorcentaje > 100 ? "var(--coral)" : "var(--blue)" } as CSSProperties}
+                >
+                  <div><small>Usado</small><b>{Math.round(avancePresupuestos.totalPorcentaje)}%</b></div>
+                </div>
+                <div className="budget-overview-numbers">
+                  <div><span>Presupuestado</span><strong>{soles(avancePresupuestos.totalLimite)}</strong></div>
+                  <div><span>Gastado</span><strong className={avancePresupuestos.totalGastado > avancePresupuestos.totalLimite ? "gasto" : ""}>{soles(avancePresupuestos.totalGastado)}</strong></div>
+                  <div><span>{avancePresupuestos.totalGastado > avancePresupuestos.totalLimite ? "Exceso" : "Disponible"}</span><strong className={avancePresupuestos.totalGastado > avancePresupuestos.totalLimite ? "gasto" : "ingreso"}>{soles(Math.abs(avancePresupuestos.totalLimite - avancePresupuestos.totalGastado))}</strong></div>
+                </div>
+              </div>
+            )}
+
             <div className="budgets-grid">
-              {avancePresupuestos.map((item) => (
+              {avancePresupuestos.detalle.map((item) => (
                 <div className="budget-card" key={item.nombre}>
                   <div className="budget-card-head">
                     <span><i style={{ background: colores[item.nombre] || "#94a3b8" }} />{item.nombre}</span>
-                    <button className="detail-link-btn" onClick={() => verDetalle("Gasto")}>Ver movimientos</button>
+                    <button className="detail-link-btn" onClick={() => verDetalle("Gasto", "Personal", undefined, item.nombre)}>Ver movimientos</button>
                   </div>
                   <div className="budget-numbers">
                     <b className={item.limite && item.gastado > item.limite ? "gasto" : ""}>{soles(item.gastado)}</b>
