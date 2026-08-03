@@ -55,13 +55,14 @@ const categorias = [
   "Comida",
   "Salud",
   "Pago de deudas",
+  "Compras del negocio",
   "Suscripciones",
   "Ropa",
   "Extras",
 ];
 const empresas = ["Personal", "SS", "Clever"] as const;
 const subcategoriasExtras = ["Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
-const categoriasIngreso = ["Sueldo", "Ventas o servicios", "Rendimientos de inversiones", "Otros ingresos", "Saldo inicial"];
+const categoriasIngreso = ["Sueldo", "Ventas o servicios", "Rendimientos de inversiones", "Aporte para gastos compartidos", "Aporte para ahorro", "Devolución de préstamo", "Otros ingresos", "Saldo inicial"];
 const fuentes = [
   "Yape",
   "Plin",
@@ -72,7 +73,7 @@ const fuentes = [
   "Otro",
 ];
 const cuentasPorEmpresa: Record<Empresa, string[]> = {
-  Personal: ["BCP", "IBK", "Yape", "Plin", "Efectivo", "SIP", "Tarjeta", "Otro"],
+  Personal: ["BCP", "IBK", "Yape", "Plin", "Efectivo", "SIP", "Préstamos a Jair", "Tarjeta", "Otro"],
   SS: ["Cuenta SS", "Efectivo SS", "Otro"],
   Clever: ["Cuenta Clever", "Efectivo Clever", "Otro"],
 };
@@ -85,6 +86,7 @@ const colores: Record<string, string> = {
   Suscripciones: "#f4b740",
   Ropa: "#ee7fb2",
   Extras: "#94a3b8",
+  "Compras del negocio": "#7b91b8",
 };
 const iniciales: Movimiento[] = [];
 const soles = (n: number) =>
@@ -357,6 +359,10 @@ function cuentaMovimiento(movimiento: Movimiento) {
     : movimiento.fuente || "Otro";
 }
 
+function esPrestamoJair(movimiento: Movimiento) {
+  return movimiento.tipo === "gasto" && movimiento.categoria === "Extras" && sinAcentos(movimiento.concepto).includes("jair");
+}
+
 export default function Home() {
   const [movimientos, setMovimientos] = useState<Movimiento[]>(iniciales);
   const [modal, setModal] = useState(false);
@@ -559,10 +565,10 @@ export default function Home() {
             : item.empresa === filtroEmpresa,
         );
     const ingresos = movimientosPeriodo
-      .filter((movimiento) => movimiento.tipo === "ingreso" && movimiento.categoria !== "Saldo inicial")
+      .filter((movimiento) => movimiento.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(movimiento.categoria))
       .reduce((total, movimiento) => total + movimiento.monto, 0);
     const gastos = movimientosPeriodo
-      .filter((movimiento) => movimiento.tipo === "gasto")
+      .filter((movimiento) => movimiento.tipo === "gasto" && !esPrestamoJair(movimiento))
       .reduce((total, movimiento) => total + movimiento.monto, 0);
     const porCategoria = categorias
       .map((nombre) => ({
@@ -571,6 +577,7 @@ export default function Home() {
           .filter(
             (movimiento) =>
               movimiento.tipo === "gasto" &&
+              !esPrestamoJair(movimiento) &&
               movimiento.categoria === nombre,
           )
           .reduce((total, movimiento) => total + movimiento.monto, 0),
@@ -594,15 +601,15 @@ export default function Home() {
       .map((nombre) => ({
         nombre,
         total: movimientosPeriodo
-          .filter((item) => item.tipo === "gasto" && item.categoria === "Extras" && (item.subcategoria || "Otros") === nombre)
+          .filter((item) => item.tipo === "gasto" && !esPrestamoJair(item) && item.categoria === "Extras" && (item.subcategoria || "Otros") === nombre)
           .reduce((total, item) => total + item.monto, 0),
       }))
       .filter((item) => item.total > 0)
       .sort((a, b) => b.total - a.total);
     const porEmpresa = empresas.map((nombre) => {
       const items = movimientosMes.filter((item) => item.tipo !== "transferencia" && item.empresa === nombre);
-      const ingresosEmpresa = items.filter((item) => item.tipo === "ingreso" && item.categoria !== "Saldo inicial").reduce((total, item) => total + item.monto, 0);
-      const gastosEmpresa = items.filter((item) => item.tipo === "gasto").reduce((total, item) => total + item.monto, 0);
+      const ingresosEmpresa = items.filter((item) => item.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)).reduce((total, item) => total + item.monto, 0);
+      const gastosEmpresa = items.filter((item) => item.tipo === "gasto" && !esPrestamoJair(item)).reduce((total, item) => total + item.monto, 0);
       const movimientosBalance = filtroMes === "Todos" ? movimientos : movimientos.filter((item) => item.fecha <= `${filtroMes}-31`);
       const saldos = new Map<string, number>();
       const sumarCuenta = (cuenta: string | undefined, montoCuenta: number) => {
@@ -611,7 +618,10 @@ export default function Home() {
       };
       movimientosBalance.forEach((item) => {
         if (item.tipo === "ingreso" && (item.empresaDestino || item.empresa) === nombre) sumarCuenta(item.cuentaDestino || cuentaMovimiento(item), item.monto);
-        if (item.tipo === "gasto" && (item.empresaOrigen || item.empresa) === nombre) sumarCuenta(item.cuentaOrigen || cuentaMovimiento(item), -item.monto);
+        if (item.tipo === "gasto" && (item.empresaOrigen || item.empresa) === nombre) {
+          sumarCuenta(item.cuentaOrigen || cuentaMovimiento(item), -item.monto);
+          if (nombre === "Personal" && esPrestamoJair(item)) sumarCuenta("Préstamos a Jair", item.monto);
+        }
         if (item.tipo === "transferencia" && item.empresaOrigen === nombre) sumarCuenta(item.cuentaOrigen || item.fuente, -item.monto);
         if (item.tipo === "transferencia" && item.empresaDestino === nombre) sumarCuenta(item.cuentaDestino || item.detalleFuente, item.monto);
       });
@@ -622,7 +632,16 @@ export default function Home() {
     const balance = porEmpresa
       .filter((item) => filtroEmpresa === "Todas" || item.nombre === filtroEmpresa)
       .reduce((total, item) => total + item.balance, 0);
-    return { ingresos, gastos, saldo: ingresos - gastos, balance, porCategoria, porFuente, porExtras, porEmpresa };
+    const personal = porEmpresa.find((item) => item.nombre === "Personal")!;
+    const ss = porEmpresa.find((item) => item.nombre === "SS")!;
+    const clever = porEmpresa.find((item) => item.nombre === "Clever")!;
+    const saldoCuenta = (nombreCuenta: string) => personal.cuentas.find((item) => sinAcentos(item.cuenta) === sinAcentos(nombreCuenta))?.saldo || 0;
+    const sip = saldoCuenta("SIP");
+    const prestadoJair = saldoCuenta("Préstamos a Jair");
+    const disponiblePersonal = personal.balance - sip - prestadoJair;
+    const interesesSip = movimientosMes.filter((item) => item.tipo === "ingreso" && item.empresa === "Personal" && item.categoria === "Rendimientos de inversiones" && sinAcentos(item.cuentaDestino || cuentaMovimiento(item)) === "sip").reduce((total, item) => total + item.monto, 0);
+    const aportesSip = movimientosMes.filter((item) => (item.tipo === "transferencia" && item.empresaDestino === "Personal" && sinAcentos(item.cuentaDestino || "") === "sip") || (item.tipo === "ingreso" && item.categoria === "Aporte para ahorro" && sinAcentos(item.cuentaDestino || cuentaMovimiento(item)) === "sip")).reduce((total, item) => total + item.monto, 0);
+    return { ingresos, gastos, saldo: ingresos - gastos, balance, porCategoria, porFuente, porExtras, porEmpresa, personal, ss, clever, sip, prestadoJair, disponiblePersonal, interesesSip, aportesSip };
   }, [movimientos, filtroMes, filtroEmpresa]);
 
   const lista = movimientos
@@ -658,23 +677,25 @@ export default function Home() {
       return;
     }
     const detalleCalculado = detalleAutomatico(fuente);
+    const cuentaSeleccionada = detalleCalculado || detalleFuente.trim() || fuente;
+    const esDevolucionJair = tipo === "ingreso" && categoriaIngreso === "Devolución de préstamo";
     setMovimientos((anteriores) => [
       {
         id: Date.now(),
-        tipo,
+        tipo: esDevolucionJair ? "transferencia" : tipo,
         monto: valor,
-        concepto: concepto.trim() || (tipo === "transferencia" ? "Transferencia propia" : "Sin concepto"),
-        categoria: tipo === "ingreso" ? categoriaIngreso : tipo === "transferencia" ? "Transferencias entre cuentas" : categoria,
-        fuente: tipo === "transferencia" ? cuentaOrigen : fuente,
-        detalleFuente: tipo === "transferencia" ? cuentaDestino : detalleCalculado || detalleFuente.trim(),
+        concepto: concepto.trim() || (esDevolucionJair ? "Devolución de préstamo de Jair" : tipo === "transferencia" ? "Transferencia propia" : "Sin concepto"),
+        categoria: esDevolucionJair ? "Devolución de préstamo" : tipo === "ingreso" ? categoriaIngreso : tipo === "transferencia" ? "Transferencias entre cuentas" : categoria,
+        fuente: esDevolucionJair ? "Préstamos a Jair" : tipo === "transferencia" ? cuentaOrigen : fuente,
+        detalleFuente: esDevolucionJair ? cuentaSeleccionada : tipo === "transferencia" ? cuentaDestino : detalleCalculado || detalleFuente.trim(),
         fecha,
-        empresa: tipo === "transferencia" ? empresaOrigen : empresa,
+        empresa: esDevolucionJair ? "Personal" : tipo === "transferencia" ? empresaOrigen : empresa,
         subcategoria: tipo === "gasto" && categoria === "Extras" ? subcategoria : "",
-        empresaOrigen: tipo === "ingreso" ? undefined : tipo === "transferencia" ? empresaOrigen : empresa,
-        empresaDestino: tipo === "gasto" ? undefined : tipo === "transferencia" ? empresaDestino : empresa,
-        cuentaOrigen: tipo === "ingreso" ? undefined : tipo === "transferencia" ? cuentaOrigen : detalleCalculado || detalleFuente.trim() || fuente,
-        cuentaDestino: tipo === "gasto" ? undefined : tipo === "transferencia" ? cuentaDestino : detalleCalculado || detalleFuente.trim() || fuente,
-        claseTransferencia: tipo === "transferencia" ? claseTransferencia : undefined,
+        empresaOrigen: esDevolucionJair ? "Personal" : tipo === "ingreso" ? undefined : tipo === "transferencia" ? empresaOrigen : empresa,
+        empresaDestino: esDevolucionJair ? "Personal" : tipo === "gasto" ? undefined : tipo === "transferencia" ? empresaDestino : empresa,
+        cuentaOrigen: esDevolucionJair ? "Préstamos a Jair" : tipo === "ingreso" ? undefined : tipo === "transferencia" ? cuentaOrigen : cuentaSeleccionada,
+        cuentaDestino: esDevolucionJair ? cuentaSeleccionada : tipo === "gasto" ? undefined : tipo === "transferencia" ? cuentaDestino : cuentaSeleccionada,
+        claseTransferencia: esDevolucionJair ? "Devolución de préstamo" : tipo === "transferencia" ? claseTransferencia : undefined,
       },
       ...anteriores,
     ]);
@@ -1094,10 +1115,10 @@ export default function Home() {
         <header>
           <div>
             <p className="eyebrow">DESDE EL 15 DE JUNIO</p>
-            <h1>{vista === "inicio" ? "Tu dinero, más claro." : "Movimientos por empresa"}</h1>
+            <h1>{vista === "inicio" ? "Resumen de patrimonio" : "Movimientos por unidad"}</h1>
             <p className="subtitle">
               {vista === "inicio"
-                ? "Una vista ejecutiva de Personal, SS y Clever."
+                ? "Personal, ahorro SIP y negocios claramente separados."
                 : "Consulta el detalle cuando lo necesites, sin recargar el panel principal."}
             </p>
           </div>
@@ -1115,53 +1136,30 @@ export default function Home() {
           <button onClick={() => setModal(true)}>＋ Nuevo movimiento</button>
         </div>
 
-        {vista === "inicio" && <section className="cards">
-          <article className="balance card">
-            <div>
-              <span className="label">Balance registrado</span>
-              <button
-                className="eye"
-                onClick={() => setOcultar(!ocultar)}
-                aria-label={ocultar ? "Mostrar balance" : "Ocultar balance"}
-              >
-                {ocultar ? "◉" : "◌"}
-              </button>
-            </div>
-            <strong>{ocultar ? "S/ ••••••" : soles(resumen.balance)}</strong>
-            <p>Saldo calculado desde el inicio del registro, incluidas transferencias</p>
-            <div className="balance-line" />
+        {vista === "inicio" && <section className="financial-summary">
+          <article className="card summary-unit personal-unit" onClick={() => setFiltroEmpresa("Personal")}>
+            <div><span className="unit-icon">P</span><span className="eyebrow">FINANZAS PERSONALES</span></div>
+            <h2>Personal</h2>
+            <strong>{ocultar ? "S/ ••••••" : soles(resumen.disponiblePersonal)}</strong>
+            <p>Dinero personal disponible, sin SIP ni préstamos por cobrar.</p>
+            <section><span>Ingresos del periodo <b>{soles(resumen.personal.ingresos)}</b></span><span>Gastos reales <b>{soles(resumen.personal.gastos)}</b></span><span>Prestado a Jair <b>{soles(resumen.prestadoJair)}</b></span></section>
           </article>
-          <article className="metric card income">
-            <span className="round">↗</span>
-            <div>
-              <span className="label">Ingresos</span>
-              <strong>{soles(resumen.ingresos)}</strong>
-              <p>Acumulado</p>
-            </div>
+          <article className="card summary-unit sip-unit">
+            <div><span className="unit-icon">S</span><span className="eyebrow">AHORRO PARA DEPARTAMENTO</span></div>
+            <h2>SIP</h2>
+            <strong>{ocultar ? "S/ ••••••" : soles(resumen.sip)}</strong>
+            <p>Meta {soles(40000)} · {Math.min(100, Math.max(0, (resumen.sip / 40000) * 100)).toFixed(1)}% alcanzado</p>
+            <div className="goal-progress"><i style={{ width: `${Math.min(100, Math.max(0, (resumen.sip / 40000) * 100))}%` }} /></div>
+            <section><span>Depósitos del periodo <b>{soles(resumen.aportesSip)}</b></span><span>Intereses del periodo <b>{soles(resumen.interesesSip)}</b></span><span>Falta para la meta <b>{soles(Math.max(0, 40000 - resumen.sip))}</b></span></section>
           </article>
-          <article className="metric card expense">
-            <span className="round">↘</span>
-            <div>
-              <span className="label">Gastos</span>
-              <strong>{soles(resumen.gastos)}</strong>
-              <p>Acumulado</p>
-            </div>
-          </article>
-          <div className="action-stack">
-            <button className="new-button compact" onClick={() => setModal(true)}>
-              <span>＋</span>
-              <b>Registrar movimiento</b>
-              <small>Ingreso manual</small>
-            </button>
-            <button
-              className="import-button"
-              onClick={() => setModalImportar(true)}
-            >
-              <span>⇧</span>
-              <b>Importar Excel</b>
-              <small>.xlsx o .csv</small>
-            </button>
-          </div>
+          {[resumen.ss, resumen.clever].map((unidad) => <article className="card summary-unit business-unit" key={unidad.nombre} onClick={() => setFiltroEmpresa(unidad.nombre)}>
+            <div><span className="unit-icon">{unidad.nombre.slice(0, 1)}</span><span className="eyebrow">NEGOCIO INDEPENDIENTE</span></div>
+            <h2>{unidad.nombre}</h2>
+            <strong>{ocultar ? "S/ ••••••" : soles(unidad.balance)}</strong>
+            <p>Cuenta y operación separada de sus finanzas personales.</p>
+            <section><span>Ventas <b>{soles(unidad.ingresos)}</b></span><span>Compras y egresos <b>{soles(unidad.gastos)}</b></span><span>Resultado del periodo <b className={unidad.resultado >= 0 ? "ingreso" : "gasto"}>{soles(unidad.resultado)}</b></span></section>
+          </article>)}
+          <button className="privacy-toggle" onClick={() => setOcultar(!ocultar)}>{ocultar ? "Mostrar importes" : "Ocultar importes"}</button>
         </section>}
 
         <section className={vista === "inicio" ? "lower-grid" : "lower-grid movements-view"}>
@@ -1233,19 +1231,12 @@ export default function Home() {
           </article>
 
           <article className="card financial-lens">
-            <div className="section-title"><div><span className="eyebrow">UNIDADES SEPARADAS</span><h2>Balance por unidad</h2></div></div>
-            <div className="company-results">
-              {resumen.porEmpresa.map((item) => (
-                <div key={item.nombre} className={filtroEmpresa === item.nombre ? "selected" : ""} onClick={() => setFiltroEmpresa(item.nombre)}>
-                  <span>{item.nombre}</span><strong className={item.balance >= 0 ? "ingreso" : "gasto"}>{soles(item.balance)}</strong>
-                  <small>Resultado del periodo {soles(item.resultado)}</small>
-                  <section className="account-balances">
-                    {item.cuentas.length ? item.cuentas.slice(0, 4).map((cuenta) => <span key={cuenta.cuenta}>{cuenta.cuenta}<b>{soles(cuenta.saldo)}</b></span>) : <span>Sin movimientos registrados</span>}
-                  </section>
-                </div>
-              ))}
+            <div className="section-title"><div><span className="eyebrow">CONTROL PERSONAL</span><h2>Dinero con destino específico</h2></div></div>
+            <div className="financial-focus">
+              <div><span>Préstamos pendientes de Jair</span><strong>{soles(resumen.prestadoJair)}</strong><small>No se consideran gasto: permanecen como dinero por cobrar.</small></div>
+              <div><span>Ahorro acumulado en SIP</span><strong>{soles(resumen.sip)}</strong><small>Incluye depósitos e intereses registrados en la cuenta SIP.</small></div>
             </div>
-            <div className="extras-detail"><span className="eyebrow">DETALLE DE EXTRAS</span>{resumen.porExtras.length ? resumen.porExtras.map((item) => <div key={item.nombre}><span>{item.nombre}</span><b>{soles(item.total)}</b></div>) : <p>No hay gastos clasificados como Extras en este periodo.</p>}</div>
+            <div className="extras-detail"><span className="eyebrow">GASTOS EXTRAS REALES</span>{resumen.porExtras.length ? resumen.porExtras.map((item) => <div key={item.nombre}><span>{item.nombre}</span><b>{soles(item.total)}</b></div>) : <p>No hay otros gastos clasificados como Extras en este periodo.</p>}</div>
           </article>
           </>}
 
