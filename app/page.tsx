@@ -21,6 +21,8 @@ type Movimiento = {
   fuente: string;
   detalleFuente?: string;
   fecha: string;
+  empresa: "SS" | "Clever" | "Personal";
+  subcategoria?: string;
 };
 type MovimientoImportado = Movimiento & { descartado?: boolean };
 type FilaExcel = Record<string, unknown>;
@@ -51,6 +53,9 @@ const categorias = [
   "Ropa",
   "Extras",
 ];
+const empresas = ["Personal", "SS", "Clever"] as const;
+const subcategoriasExtras = ["Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
+const categoriasIngreso = ["Sueldo", "Ventas o servicios", "Rendimientos de inversiones", "Otros ingresos"];
 const fuentes = [
   "Yape",
   "Plin",
@@ -343,6 +348,9 @@ export default function Home() {
   const [monto, setMonto] = useState("");
   const [concepto, setConcepto] = useState("");
   const [categoria, setCategoria] = useState("Comida");
+  const [empresa, setEmpresa] = useState<(typeof empresas)[number]>("Personal");
+  const [subcategoria, setSubcategoria] = useState("Otros");
+  const [categoriaIngreso, setCategoriaIngreso] = useState("Sueldo");
   const [fuente, setFuente] = useState("Yape");
   const [detalleFuente, setDetalleFuente] = useState("");
   const [cuentaOrigen, setCuentaOrigen] = useState("BCP");
@@ -351,6 +359,8 @@ export default function Home() {
   const [filtro, setFiltro] = useState("Todos");
   const [filtroFuente, setFiltroFuente] = useState("Todas");
   const [filtroMes, setFiltroMes] = useState("Todos");
+  const [filtroEmpresa, setFiltroEmpresa] = useState("Todas");
+  const [vista, setVista] = useState<"inicio" | "movimientos">("inicio");
   const [busqueda, setBusqueda] = useState("");
   const [ocultar, setOcultar] = useState(false);
   const [cargado, setCargado] = useState(false);
@@ -389,6 +399,8 @@ export default function Home() {
             ...movimiento,
             categoria: mapa[movimiento.categoria] || movimiento.categoria,
             fuente: movimiento.fuente || "Otro",
+            empresa: movimiento.empresa || "Personal",
+            subcategoria: movimiento.subcategoria || "",
           })),
         );
       }
@@ -419,7 +431,7 @@ export default function Home() {
       setEstadoNube("Sincronizando con la nube…");
       const { data, error } = await supabase
         .from("movimientos")
-        .select("client_id,tipo,monto,concepto,categoria,fuente,detalle_fuente,fecha")
+        .select("client_id,tipo,monto,concepto,categoria,fuente,detalle_fuente,fecha,empresa,subcategoria")
         .order("fecha", { ascending: false });
       if (!activo) return;
       if (error) {
@@ -435,6 +447,8 @@ export default function Home() {
         fuente: item.fuente,
         detalleFuente: item.detalle_fuente || "",
         fecha: item.fecha,
+        empresa: item.empresa || "Personal",
+        subcategoria: item.subcategoria || "",
       }));
       setMovimientos((locales) => {
         const combinados = new Map<number, Movimiento>();
@@ -463,6 +477,8 @@ export default function Home() {
         fuente: item.fuente || "Otro",
         detalle_fuente: item.detalleFuente || null,
         fecha: item.fecha,
+        empresa: item.empresa || "Personal",
+        subcategoria: item.subcategoria || null,
         updated_at: new Date().toISOString(),
       }));
       const guardado = filas.length
@@ -496,9 +512,12 @@ export default function Home() {
   );
 
   const resumen = useMemo(() => {
-    const movimientosPeriodo = filtroMes === "Todos"
+    const movimientosMes = filtroMes === "Todos"
       ? movimientos
       : movimientos.filter((item) => item.fecha.startsWith(filtroMes));
+    const movimientosPeriodo = filtroEmpresa === "Todas"
+      ? movimientosMes
+      : movimientosMes.filter((item) => item.empresa === filtroEmpresa);
     const ingresos = movimientosPeriodo
       .filter((movimiento) => movimiento.tipo === "ingreso")
       .reduce((total, movimiento) => total + movimiento.monto, 0);
@@ -531,8 +550,23 @@ export default function Home() {
       }))
       .filter((item) => item.total > 0)
       .sort((a, b) => b.total - a.total);
-    return { ingresos, gastos, saldo: ingresos - gastos, porCategoria, porFuente };
-  }, [movimientos, filtroMes]);
+    const porExtras = subcategoriasExtras
+      .map((nombre) => ({
+        nombre,
+        total: movimientosPeriodo
+          .filter((item) => item.tipo === "gasto" && item.categoria === "Extras" && (item.subcategoria || "Otros") === nombre)
+          .reduce((total, item) => total + item.monto, 0),
+      }))
+      .filter((item) => item.total > 0)
+      .sort((a, b) => b.total - a.total);
+    const porEmpresa = empresas.map((nombre) => {
+      const items = movimientosMes.filter((item) => item.empresa === nombre);
+      const ingresosEmpresa = items.filter((item) => item.tipo === "ingreso").reduce((total, item) => total + item.monto, 0);
+      const gastosEmpresa = items.filter((item) => item.tipo === "gasto").reduce((total, item) => total + item.monto, 0);
+      return { nombre, ingresos: ingresosEmpresa, gastos: gastosEmpresa, resultado: ingresosEmpresa - gastosEmpresa };
+    });
+    return { ingresos, gastos, saldo: ingresos - gastos, porCategoria, porFuente, porExtras, porEmpresa };
+  }, [movimientos, filtroMes, filtroEmpresa]);
 
   const lista = movimientos
     .filter(
@@ -541,6 +575,7 @@ export default function Home() {
         (filtroFuente === "Todas" ||
           (movimiento.fuente || "Otro") === filtroFuente) &&
         (filtroMes === "Todos" || movimiento.fecha.startsWith(filtroMes)) &&
+        (filtroEmpresa === "Todas" || movimiento.empresa === filtroEmpresa) &&
         movimiento.concepto.toLowerCase().includes(busqueda.toLowerCase()),
     )
     .sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -570,10 +605,12 @@ export default function Home() {
         tipo,
         monto: valor,
         concepto: concepto.trim() || (tipo === "transferencia" ? "Transferencia propia" : "Sin concepto"),
-        categoria: tipo === "ingreso" ? "Ingresos" : tipo === "transferencia" ? "Transferencias entre cuentas" : categoria,
+        categoria: tipo === "ingreso" ? categoriaIngreso : tipo === "transferencia" ? "Transferencias entre cuentas" : categoria,
         fuente: tipo === "transferencia" ? cuentaOrigen : fuente,
         detalleFuente: tipo === "transferencia" ? cuentaDestino : detalleCalculado || detalleFuente.trim(),
         fecha,
+        empresa,
+        subcategoria: tipo === "gasto" && categoria === "Extras" ? subcategoria : "",
       },
       ...anteriores,
     ]);
@@ -582,6 +619,8 @@ export default function Home() {
     setDetalleFuente("");
     setCuentaOrigen("BCP");
     setCuentaDestino("IBK");
+    setSubcategoria("Otros");
+    setCategoriaIngreso("Sueldo");
     setFecha(hoy());
     setModal(false);
   }
@@ -819,11 +858,13 @@ export default function Home() {
           concepto: conceptoImportado,
           categoria:
             tipoImportado === "ingreso"
-              ? "Ingresos"
+              ? categoriasIngreso[0]
               : sugerirCategoria(conceptoImportado),
           fuente: fuenteImportada.fuente,
           detalleFuente: fuenteImportada.detalle,
           fecha: fechaImportada,
+          empresa: "Personal",
+          subcategoria: "",
         };
         const clave = claveMovimiento(movimiento);
         if (existentes.has(clave) || nuevasClaves.has(clave)) {
@@ -863,8 +904,8 @@ export default function Home() {
       tipo: nuevoTipo,
       categoria:
         nuevoTipo === "ingreso"
-          ? "Ingresos"
-          : actual?.categoria === "Ingresos"
+          ? categoriasIngreso[0]
+          : categoriasIngreso.includes(actual?.categoria || "")
             ? sugerirCategoria(actual.concepto)
             : actual?.categoria,
     });
@@ -894,6 +935,8 @@ export default function Home() {
           fuente: fuenteMovimiento,
           detalleFuente: detalleFuenteMovimiento,
           fecha: fechaMovimiento,
+          empresa: empresaMovimiento,
+          subcategoria: subcategoriaMovimiento,
         }): Movimiento => ({
           id,
           tipo: tipoMovimiento,
@@ -903,6 +946,8 @@ export default function Home() {
           fuente: fuenteMovimiento,
           detalleFuente: detalleFuenteMovimiento,
           fecha: fechaMovimiento,
+          empresa: empresaMovimiento || "Personal",
+          subcategoria: subcategoriaMovimiento || "",
         }),
       );
     if (confirmados.length) {
@@ -953,10 +998,10 @@ export default function Home() {
           <strong>Mis Finanzas</strong>
         </div>
         <nav>
-          <button className="active">
+          <button className={vista === "inicio" ? "active" : ""} onClick={() => setVista("inicio")}>
             ⌂ <span>Inicio</span>
           </button>
-          <button>
+          <button className={vista === "movimientos" ? "active" : ""} onClick={() => setVista("movimientos")}>
             ⇄ <span>Movimientos</span>
           </button>
           <button>
@@ -982,10 +1027,11 @@ export default function Home() {
         <header>
           <div>
             <p className="eyebrow">DESDE EL 15 DE JUNIO</p>
-            <h1>Tu dinero, más claro.</h1>
+            <h1>{vista === "inicio" ? "Tu dinero, más claro." : "Movimientos por empresa"}</h1>
             <p className="subtitle">
-              Registra tus movimientos y descubre en qué y con qué medio estás
-              pagando.
+              {vista === "inicio"
+                ? "Una vista ejecutiva de Personal, SS y Clever."
+                : "Consulta el detalle cuando lo necesites, sin recargar el panel principal."}
             </p>
           </div>
           <div className="account-area">
@@ -996,7 +1042,13 @@ export default function Home() {
           </div>
         </header>
 
-        <section className="cards">
+        <div className="scope-bar card">
+          <div><span>Unidad</span><select value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)}><option>Todas</option>{empresas.map((item) => <option key={item}>{item}</option>)}</select></div>
+          <div><span>Periodo</span><select value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)}><option value="Todos">Todos los meses</option>{mesesDisponibles.map((mes) => <option key={mes} value={mes}>{new Date(`${mes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</option>)}</select></div>
+          <button onClick={() => setModal(true)}>＋ Nuevo movimiento</button>
+        </div>
+
+        {vista === "inicio" && <section className="cards">
           <article className="balance card">
             <div>
               <span className="label">Balance disponible</span>
@@ -1043,9 +1095,10 @@ export default function Home() {
               <small>.xlsx o .csv</small>
             </button>
           </div>
-        </section>
+        </section>}
 
-        <section className="lower-grid">
+        <section className={vista === "inicio" ? "lower-grid" : "lower-grid movements-view"}>
+          {vista === "inicio" && <>
           <article className="card distribution">
             <div className="section-title">
               <div>
@@ -1112,7 +1165,18 @@ export default function Home() {
             )}
           </article>
 
-          <article className="card movements">
+          <article className="card financial-lens">
+            <div className="section-title"><div><span className="eyebrow">UNIDADES</span><h2>Resultado por empresa</h2></div></div>
+            <div className="company-results">
+              {resumen.porEmpresa.map((item) => (
+                <div key={item.nombre}><span>{item.nombre}</span><strong className={item.resultado >= 0 ? "ingreso" : "gasto"}>{soles(item.resultado)}</strong><small>Ingresos {soles(item.ingresos)} · Gastos {soles(item.gastos)}</small></div>
+              ))}
+            </div>
+            <div className="extras-detail"><span className="eyebrow">DETALLE DE EXTRAS</span>{resumen.porExtras.length ? resumen.porExtras.map((item) => <div key={item.nombre}><span>{item.nombre}</span><b>{soles(item.total)}</b></div>) : <p>No hay gastos clasificados como Extras en este periodo.</p>}</div>
+          </article>
+          </>}
+
+          {vista === "movimientos" && <article className="card movements">
             <div className="section-title">
               <div>
                 <span className="eyebrow">ACTIVIDAD</span>
@@ -1143,6 +1207,7 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
+                <select aria-label="Empresa" value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)}><option>Todas</option>{empresas.map((item) => <option key={item}>{item}</option>)}</select>
                 <select
                   aria-label="Medio de pago"
                   value={filtroFuente}
@@ -1173,7 +1238,7 @@ export default function Home() {
                     <div className="movement-name">
                       <b>{movimiento.concepto}</b>
                       <small>
-                        {movimiento.categoria} · {movimiento.fuente || "Otro"}
+                        {movimiento.empresa} · {movimiento.categoria}{movimiento.subcategoria ? ` / ${movimiento.subcategoria}` : ""} · {movimiento.fuente || "Otro"}
                         {movimiento.detalleFuente
                           ? ` (${movimiento.detalleFuente})`
                           : ""}{" "}
@@ -1203,7 +1268,7 @@ export default function Home() {
                 <p className="empty">No encontramos movimientos.</p>
               )}
             </div>
-          </article>
+          </article>}
         </section>
       </section>
 
@@ -1269,6 +1334,20 @@ export default function Home() {
                   Transferencia
                 </button>
               </div>
+              <label>
+                Empresa o unidad
+                <select value={empresa} onChange={(e) => setEmpresa(e.target.value as (typeof empresas)[number])}>
+                  {empresas.map((item) => <option key={item}>{item}</option>)}
+                </select>
+              </label>
+              {tipo === "ingreso" && (
+                <label>
+                  Tipo de ingreso
+                  <select value={categoriaIngreso} onChange={(e) => setCategoriaIngreso(e.target.value)}>
+                    {categoriasIngreso.map((item) => <option key={item}>{item}</option>)}
+                  </select>
+                </label>
+              )}
               {tipo === "gasto" && (
                 <label>
                   Categoría
@@ -1280,6 +1359,14 @@ export default function Home() {
                     {categorias.map((item) => (
                       <option key={item}>{item}</option>
                     ))}
+                  </select>
+                </label>
+              )}
+              {tipo === "gasto" && categoria === "Extras" && (
+                <label>
+                  ¿En qué se fue este gasto?
+                  <select value={subcategoria} onChange={(e) => setSubcategoria(e.target.value)}>
+                    {subcategoriasExtras.map((item) => <option key={item}>{item}</option>)}
                   </select>
                 </label>
               )}
@@ -1666,6 +1753,21 @@ export default function Home() {
               </div>
               <h3>{actual.concepto}</h3>
               {actual.detalleFuente && <p>{actual.detalleFuente}</p>}
+              <label>
+                Empresa o unidad
+                <select
+                  value={actual.empresa}
+                  onChange={(e) =>
+                    actualizarActual({
+                      empresa: e.target.value as (typeof empresas)[number],
+                    })
+                  }
+                >
+                  {empresas.map((item) => (
+                    <option key={item}>{item}</option>
+                  ))}
+                </select>
+              </label>
               <div className="type-toggle">
                 <button
                   type="button"
@@ -1699,10 +1801,34 @@ export default function Home() {
                   </select>
                 </label>
               ) : (
-                <div className="income-category">
-                  <span>Categoría</span>
-                  <b>Ingresos</b>
-                </div>
+                <label>
+                  Tipo de ingreso
+                  <select
+                    value={actual.categoria}
+                    onChange={(e) =>
+                      actualizarActual({ categoria: e.target.value })
+                    }
+                  >
+                    {categoriasIngreso.map((item) => (
+                      <option key={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {actual.tipo === "gasto" && actual.categoria === "Extras" && (
+                <label>
+                  Detalle de Extras
+                  <select
+                    value={actual.subcategoria || "Otros"}
+                    onChange={(e) =>
+                      actualizarActual({ subcategoria: e.target.value })
+                    }
+                  >
+                    {subcategoriasExtras.map((item) => (
+                      <option key={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
               )}
               <label>
                 Medio de pago o fuente
