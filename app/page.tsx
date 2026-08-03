@@ -63,7 +63,14 @@ const categoriasDefault = [
   "Extras",
 ];
 const empresasDefault = ["Personal", "SS", "Clever"];
-const subcategoriasExtrasDefault = ["Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
+const subcategoriasExtrasDefault = ["Apoyo a padres", "Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
+const presupuestoPersonalDefault: Record<string, number> = {
+  Pasajes: 400,
+  Comida: 300,
+  "Pago de deudas": 3300,
+};
+const limiteOtrosGastos = 300;
+const limiteGastoMensual = 4300;
 const categoriasIngresoDefault = ["Sueldo", "Ventas o servicios", "Rendimientos de inversiones", "Aporte para gastos compartidos", "Aporte para ahorro", "Devolución de préstamo", "Otros ingresos", "Saldo inicial"];
 const fuentesDefault = [
   "Yape",
@@ -83,7 +90,7 @@ const paletaCategorias = ["#58c7a2", "#ff6b5f", "#9b7bf7", "#3e7bfa", "#f4b740",
 function colorCategoria(nombre: string, indice: number) {
   return colores[nombre] || paletaCategorias[indice % paletaCategorias.length];
 }
-const clasesTransferencia = ["Entre cuentas propias", "Aporte de capital", "Devolución de aporte", "Distribución de utilidades", "Ahorro o inversión"];
+const clasesTransferencia = ["Entre cuentas propias", "Aporte de capital", "Devolución de aporte", "Devolución de préstamo", "Distribución de utilidades", "Ahorro o inversión"];
 const colores: Record<string, string> = {
   Pasajes: "#58c7a2",
   Comida: "#ff6b5f",
@@ -375,6 +382,15 @@ function Sparkline({ series }: { series: { valores: number[]; color: string }[] 
   );
 }
 
+function ventanaIngresosMes(mes: string) {
+  const [anio, numeroMes] = mes.split("-").map(Number);
+  const anterior = numeroMes === 1
+    ? `${anio - 1}-12`
+    : `${anio}-${String(numeroMes - 1).padStart(2, "0")}`;
+  const ultimoDia = new Date(anio, numeroMes, 0).getDate();
+  return { desde: `${anterior}-25`, hasta: `${mes}-${String(ultimoDia).padStart(2, "0")}` };
+}
+
 function cuentaMovimiento(movimiento: Movimiento) {
   const detalle = movimiento.detalleFuente?.trim();
   return detalle && ["Yape", "Plin", "Transferencia"].includes(movimiento.fuente)
@@ -383,11 +399,19 @@ function cuentaMovimiento(movimiento: Movimiento) {
 }
 
 function esPrestamoJair(movimiento: Movimiento) {
-  return movimiento.tipo === "gasto" && movimiento.categoria === "Extras" && sinAcentos(movimiento.concepto).includes("jair");
+  return movimiento.tipo === "gasto" && sinAcentos(movimiento.concepto).includes("jair");
+}
+
+function esMovimientoJair(movimiento: Movimiento) {
+  return esPrestamoJair(movimiento) ||
+    (movimiento.tipo === "transferencia" &&
+      (movimiento.claseTransferencia === "Devolución de préstamo" ||
+        movimiento.cuentaOrigen === "Préstamos a Jair" ||
+        sinAcentos(movimiento.concepto).includes("jair")));
 }
 
 function normalizarDevolucionJair(movimiento: Movimiento): Movimiento {
-  const esDevolucionRegistrada = movimiento.tipo === "ingreso" && movimiento.fecha === "2026-07-03" && movimiento.monto === 500 && sinAcentos(movimiento.concepto).includes("jair");
+  const esDevolucionRegistrada = movimiento.tipo !== "gasto" && movimiento.fecha === "2026-07-03" && movimiento.monto === 500 && sinAcentos(movimiento.concepto).includes("jair");
   if (!esDevolucionRegistrada) return movimiento;
   const cuentaRecibida = movimiento.detalleFuente || cuentaMovimiento(movimiento) || "BCP";
   return {
@@ -429,6 +453,7 @@ export default function Home() {
   const [filtroFuente, setFiltroFuente] = useState("Todas");
   const [filtroCuenta, setFiltroCuenta] = useState("");
   const [filtroCategoriaLista, setFiltroCategoriaLista] = useState("");
+  const [soloJair, setSoloJair] = useState(false);
   const [filtroMes, setFiltroMes] = useState("Todos");
   const [filtroEmpresa, setFiltroEmpresa] = useState("Todas");
   const [vista, setVista] = useState<"inicio" | "movimientos" | "metas" | "presupuestos" | "reportes" | "ajustes">("inicio");
@@ -453,6 +478,7 @@ export default function Home() {
   const [mensajeCuenta, setMensajeCuenta] = useState("");
   const [procesandoCuenta, setProcesandoCuenta] = useState(false);
   const [nubeLista, setNubeLista] = useState(false);
+  const [sincronizandoManual, setSincronizandoManual] = useState(false);
   const [estadoNube, setEstadoNube] = useState("Guardado en este dispositivo");
   const [configuracionLista, setConfiguracionLista] = useState(false);
   const [categoriasGastoState, setCategoriasGastoState] = useState<string[]>([]);
@@ -468,6 +494,7 @@ export default function Home() {
   const [nuevaEmpresa, setNuevaEmpresa] = useState("");
   const [empresaAjustes, setEmpresaAjustes] = useState("");
   const [nuevaCuenta, setNuevaCuenta] = useState("");
+  const [movimientoEditando, setMovimientoEditando] = useState<number | null>(null);
   const inputArchivo = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -514,6 +541,11 @@ export default function Home() {
       if (!nuevaSession) {
         setNubeLista(false);
         setEstadoNube("Guardado en este dispositivo");
+        setMovimientos([]);
+        setPresupuestos({});
+        setCargado(false);
+        setPresupuestosCargados(false);
+        setConfiguracionLista(false);
       }
     });
     return () => data.subscription.unsubscribe();
@@ -734,7 +766,7 @@ export default function Home() {
         empresa_destino: item.empresaDestino || (item.tipo !== "gasto" ? item.empresa : null),
         cuenta_origen: item.cuentaOrigen || (item.tipo !== "ingreso" ? cuentaMovimiento(item) : null),
         cuenta_destino: item.cuentaDestino || (item.tipo === "transferencia" ? item.detalleFuente || null : item.tipo === "ingreso" ? cuentaMovimiento(item) : null),
-        clase_transferencia: item.claseTransferencia || (item.tipo === "transferencia" ? "Entre cuentas propias" : null),
+        clase_transferencia: item.claseTransferencia || null,
         excluir_presupuesto: item.excluirPresupuesto || false,
         updated_at: new Date().toISOString(),
       }));
@@ -745,14 +777,72 @@ export default function Home() {
         setEstadoNube("Error al guardar; se conserva copia local");
         return;
       }
-      const ids = movimientos.map((item) => item.id);
-      const borrado = ids.length
-        ? await supabase.from("movimientos").delete().eq("user_id", session.user.id).not("client_id", "in", `(${ids.join(",")})`)
-        : await supabase.from("movimientos").delete().eq("user_id", session.user.id);
-      setEstadoNube(borrado.error ? "Error al sincronizar; se conserva copia local" : "Guardado en la nube");
+      setEstadoNube("Guardado en la nube");
     }, 500);
     return () => window.clearTimeout(temporizador);
   }, [movimientos, session, nubeLista]);
+
+  async function sincronizarAhora() {
+    if (!session || sincronizandoManual) return;
+    setSincronizandoManual(true);
+    setEstadoNube("Sincronizando con la nube…");
+    try {
+      const copiaLocal = localStorage.getItem("mis-finanzas-movimientos");
+      const locales = copiaLocal ? JSON.parse(copiaLocal) as Movimiento[] : movimientos;
+      const filas = locales.map((item) => ({
+        user_id: session.user.id,
+        client_id: item.id,
+        tipo: item.tipo,
+        monto: item.monto,
+        concepto: item.concepto,
+        categoria: item.categoria,
+        fuente: item.fuente || "Otro",
+        detalle_fuente: item.detalleFuente || null,
+        fecha: item.fecha,
+        empresa: item.empresa || "Personal",
+        subcategoria: item.subcategoria || null,
+        empresa_origen: item.empresaOrigen || (item.tipo !== "ingreso" ? item.empresa : null),
+        empresa_destino: item.empresaDestino || (item.tipo !== "gasto" ? item.empresa : null),
+        cuenta_origen: item.cuentaOrigen || (item.tipo !== "ingreso" ? cuentaMovimiento(item) : null),
+        cuenta_destino: item.cuentaDestino || (item.tipo === "transferencia" ? item.detalleFuente || null : item.tipo === "ingreso" ? cuentaMovimiento(item) : null),
+        clase_transferencia: item.claseTransferencia || null,
+        excluir_presupuesto: item.excluirPresupuesto || false,
+        updated_at: new Date().toISOString(),
+      }));
+      const guardado = filas.length
+        ? await supabase.from("movimientos").upsert(filas, { onConflict: "user_id,client_id" })
+        : { error: null };
+      if (guardado.error) throw guardado.error;
+
+      const { data, error } = await supabase
+        .from("movimientos")
+        .select("client_id,tipo,monto,concepto,categoria,fuente,detalle_fuente,fecha,empresa,subcategoria,empresa_origen,empresa_destino,cuenta_origen,cuenta_destino,clase_transferencia,excluir_presupuesto")
+        .order("fecha", { ascending: false });
+      if (error) throw error;
+      const remotos: Movimiento[] = (data || []).map((item) => normalizarDevolucionJair({
+        id: Number(item.client_id), tipo: item.tipo as Tipo, monto: Number(item.monto),
+        concepto: item.concepto, categoria: item.categoria, fuente: item.fuente,
+        detalleFuente: item.detalle_fuente || "", fecha: item.fecha,
+        empresa: item.empresa || "Personal", subcategoria: item.subcategoria || "",
+        empresaOrigen: item.empresa_origen || undefined, empresaDestino: item.empresa_destino || undefined,
+        cuentaOrigen: item.cuenta_origen || undefined, cuentaDestino: item.cuenta_destino || undefined,
+        claseTransferencia: item.clase_transferencia || undefined,
+        excluirPresupuesto: item.excluir_presupuesto || false,
+      }));
+      const combinados = new Map<number, Movimiento>();
+      locales.forEach((item) => combinados.set(item.id, item));
+      remotos.forEach((item) => combinados.set(item.id, item));
+      const resultado = Array.from(combinados.values());
+      setMovimientos(resultado);
+      localStorage.setItem("mis-finanzas-movimientos", JSON.stringify(resultado));
+      setNubeLista(true);
+      setEstadoNube("Guardado en la nube");
+    } catch {
+      setEstadoNube("Error al sincronizar; se conserva copia local");
+    } finally {
+      setSincronizandoManual(false);
+    }
+  }
 
   useEffect(() => {
     if (cargado) {
@@ -768,10 +858,12 @@ export default function Home() {
       const data = localStorage.getItem("mis-finanzas-presupuestos");
       if (data) {
         try {
-          setPresupuestos(JSON.parse(data));
+          setPresupuestos({ ...presupuestoPersonalDefault, ...JSON.parse(data) });
         } catch {
-          setPresupuestos({});
+          setPresupuestos(presupuestoPersonalDefault);
         }
+      } else {
+        setPresupuestos(presupuestoPersonalDefault);
       }
       setPresupuestosCargados(true);
     });
@@ -834,6 +926,12 @@ export default function Home() {
     const movimientosMes = filtroMes === "Todos"
       ? movimientos
       : movimientos.filter((item) => item.fecha.startsWith(filtroMes));
+    const ingresosMes = filtroMes === "Todos"
+      ? movimientos.filter((item) => item.tipo === "ingreso")
+      : movimientos.filter((item) => {
+          const ventana = ventanaIngresosMes(filtroMes);
+          return item.tipo === "ingreso" && item.fecha >= ventana.desde && item.fecha <= ventana.hasta;
+        });
     const movimientosPeriodo = filtroEmpresa === "Todas"
       ? movimientosMes
       : movimientosMes.filter((item) =>
@@ -841,7 +939,10 @@ export default function Home() {
             ? item.empresaOrigen === filtroEmpresa || item.empresaDestino === filtroEmpresa
             : item.empresa === filtroEmpresa,
         );
-    const ingresos = movimientosPeriodo
+    const ingresosPeriodo = filtroEmpresa === "Todas"
+      ? ingresosMes
+      : ingresosMes.filter((item) => item.empresa === filtroEmpresa);
+    const ingresos = ingresosPeriodo
       .filter((movimiento) => movimiento.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(movimiento.categoria))
       .reduce((total, movimiento) => total + movimiento.monto, 0);
     const gastos = movimientosPeriodo
@@ -894,7 +995,7 @@ export default function Home() {
       .sort((a, b) => b.total - a.total);
     const porEmpresa = empresas.map((nombre) => {
       const items = movimientosMes.filter((item) => item.tipo !== "transferencia" && item.empresa === nombre);
-      const ingresosEmpresa = items.filter((item) => item.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)).reduce((total, item) => total + item.monto, 0);
+      const ingresosEmpresa = ingresosMes.filter((item) => item.empresa === nombre && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)).reduce((total, item) => total + item.monto, 0);
       const gastosEmpresa = items.filter((item) => item.tipo === "gasto" && !esPrestamoJair(item)).reduce((total, item) => total + item.monto, 0);
       const movimientosBalance = filtroMes === "Todos" ? movimientos : movimientos.filter((item) => item.fecha <= `${filtroMes}-31`);
       const saldos = new Map<string, number>();
@@ -948,22 +1049,35 @@ export default function Home() {
         porcentaje: limite ? (gastado / limite) * 100 : 0,
       };
     });
-    const totalLimite = detalle.reduce((total, item) => total + item.limite, 0);
-    const totalGastado = detalle.reduce((total, item) => total + item.gastado, 0);
-    return { detalle, totalLimite, totalGastado, totalPorcentaje: totalLimite ? (totalGastado / totalLimite) * 100 : 0 };
+    const categoriasPrincipales = new Set(["Pasajes", "Comida", "Pago de deudas"]);
+    const otrosGastado = movimientosMes
+      .filter((item) => !categoriasPrincipales.has(item.categoria))
+      .reduce((total, item) => total + item.monto, 0);
+    const totalGastado = movimientosMes.reduce((total, item) => total + item.monto, 0);
+    const totalLimite = limiteGastoMensual;
+    return {
+      detalle,
+      otros: { gastado: otrosGastado, limite: limiteOtrosGastos, porcentaje: (otrosGastado / limiteOtrosGastos) * 100 },
+      total: { gastado: totalGastado, limite: limiteGastoMensual, porcentaje: (totalGastado / limiteGastoMensual) * 100 },
+      totalLimite,
+      totalGastado,
+      totalPorcentaje: totalLimite ? (totalGastado / totalLimite) * 100 : 0,
+    };
   }, [movimientos, presupuestos, mesPresupuesto, categorias]);
 
   const reporteMensual = useMemo(() => {
     const porMes = new Map<string, { ingresos: number; gastos: number }>();
-    movimientos.forEach((item) => {
-      const mes = item.fecha.slice(0, 7);
+    const mesesReporte = Array.from(new Set(movimientos.map((item) => item.fecha.slice(0, 7))));
+    mesesReporte.forEach((mes) => {
       if (!porMes.has(mes)) porMes.set(mes, { ingresos: 0, gastos: 0 });
       const registro = porMes.get(mes)!;
-      if (item.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)) {
-        registro.ingresos += item.monto;
-      } else if (item.tipo === "gasto" && !esPrestamoJair(item)) {
-        registro.gastos += item.monto;
-      }
+      const ventana = ventanaIngresosMes(mes);
+      registro.ingresos = movimientos
+        .filter((item) => item.tipo === "ingreso" && item.fecha >= ventana.desde && item.fecha <= ventana.hasta && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria))
+        .reduce((total, item) => total + item.monto, 0);
+      registro.gastos = movimientos
+        .filter((item) => item.tipo === "gasto" && item.fecha.startsWith(mes) && !esPrestamoJair(item))
+        .reduce((total, item) => total + item.monto, 0);
     });
     const meses = Array.from(porMes.entries())
       .map(([mes, valores]) => ({ mes, ...valores, ahorro: valores.ingresos - valores.gastos }))
@@ -981,6 +1095,7 @@ export default function Home() {
           (movimiento.fuente || "Otro") === filtroFuente) &&
         (!filtroCuenta || sinAcentos(movimiento.cuentaDestino || movimiento.cuentaOrigen || cuentaMovimiento(movimiento)).includes(filtroCuenta)) &&
         (!filtroCategoriaLista || movimiento.categoria === filtroCategoriaLista) &&
+        (!soloJair || esMovimientoJair(movimiento)) &&
         (filtroMes === "Todos" || movimiento.fecha.startsWith(filtroMes)) &&
         (filtroEmpresa === "Todas" || (movimiento.tipo === "transferencia"
           ? movimiento.empresaOrigen === filtroEmpresa || movimiento.empresaDestino === filtroEmpresa
@@ -1010,9 +1125,8 @@ export default function Home() {
     const detalleCalculado = detalleAutomatico(fuente);
     const cuentaSeleccionada = detalleCalculado || detalleFuente.trim() || fuente;
     const esDevolucionJair = tipo === "ingreso" && categoriaIngreso === "Devolución de préstamo";
-    setMovimientos((anteriores) => [
-      {
-        id: Date.now(),
+    const movimientoGuardado: Movimiento = {
+        id: movimientoEditando ?? Date.now(),
         tipo: esDevolucionJair ? "transferencia" : tipo,
         monto: valor,
         concepto: concepto.trim() || (esDevolucionJair ? "Devolución de préstamo de Jair" : tipo === "transferencia" ? "Transferencia propia" : "Sin concepto"),
@@ -1028,9 +1142,10 @@ export default function Home() {
         cuentaDestino: esDevolucionJair ? cuentaSeleccionada : tipo === "gasto" ? undefined : tipo === "transferencia" ? cuentaDestino : cuentaSeleccionada,
         claseTransferencia: esDevolucionJair ? "Devolución de préstamo" : tipo === "transferencia" ? claseTransferencia : undefined,
         excluirPresupuesto: tipo === "gasto" && categoria === "Pasajes" ? excluirPresupuesto : false,
-      },
-      ...anteriores,
-    ]);
+      };
+    setMovimientos((anteriores) => movimientoEditando === null
+      ? [movimientoGuardado, ...anteriores]
+      : anteriores.map((movimiento) => movimiento.id === movimientoEditando ? movimientoGuardado : movimiento));
     setMonto("");
     setConcepto("");
     setDetalleFuente("");
@@ -1043,22 +1158,71 @@ export default function Home() {
     setSubcategoria("Otros");
     setCategoriaIngreso("Sueldo");
     setFecha(hoy());
+    setMovimientoEditando(null);
     setModal(false);
   }
 
-  function borrar(id: number) {
-    if (confirm("¿Eliminar este movimiento?")) {
-      setMovimientos((anteriores) =>
-        anteriores.filter((movimiento) => movimiento.id !== id),
-      );
+  function editar(movimiento: Movimiento) {
+    setMovimientoEditando(movimiento.id);
+    setTipo(movimiento.tipo);
+    setMonto(String(movimiento.monto));
+    setConcepto(movimiento.concepto === "Sin concepto" ? "" : movimiento.concepto);
+    setCategoria(movimiento.tipo === "gasto" ? movimiento.categoria : categorias[0] || "Comida");
+    setCategoriaIngreso(movimiento.tipo === "ingreso" ? movimiento.categoria : "Sueldo");
+    setEmpresa(movimiento.empresa || "Personal");
+    setSubcategoria(movimiento.subcategoria || "Otros");
+    setFuente(movimiento.tipo === "transferencia" ? "Transferencia" : movimiento.fuente || "Otro");
+    setDetalleFuente(movimiento.tipo === "transferencia" ? "" : movimiento.detalleFuente || "");
+    setEmpresaOrigen(movimiento.empresaOrigen || movimiento.empresa || "Personal");
+    setEmpresaDestino(movimiento.empresaDestino || movimiento.empresa || "Personal");
+    setCuentaOrigen(movimiento.cuentaOrigen || movimiento.fuente || "BCP");
+    setCuentaDestino(movimiento.cuentaDestino || movimiento.detalleFuente || "IBK");
+    setClaseTransferencia(movimiento.claseTransferencia || "Entre cuentas propias");
+    setExcluirPresupuesto(Boolean(movimiento.excluirPresupuesto));
+    setFecha(movimiento.fecha);
+    setModal(true);
+  }
+
+  function cerrarModalMovimiento() {
+    setMovimientoEditando(null);
+    setModal(false);
+  }
+
+  async function borrar(id: number) {
+    if (!confirm("¿Eliminar este movimiento?")) return;
+    if (session) {
+      setEstadoNube("Eliminando de la nube…");
+      const { error } = await supabase
+        .from("movimientos")
+        .delete()
+        .eq("user_id", session.user.id)
+        .eq("client_id", id);
+      if (error) {
+        setEstadoNube("No se pudo eliminar; el movimiento se conserva");
+        return;
+      }
+      setEstadoNube("Guardado en la nube");
     }
+    setMovimientos((anteriores) => anteriores.filter((movimiento) => movimiento.id !== id));
   }
 
   function verDetalle(tipoDetalle: "Todos" | "Ingreso" | "Gasto" | "Transferencia", empresaDetalle?: Empresa | "Todas", cuentaDetalle?: string, categoriaDetalle?: string) {
+    setSoloJair(false);
     setFiltro(tipoDetalle);
     if (empresaDetalle) setFiltroEmpresa(empresaDetalle);
     setFiltroCuenta(cuentaDetalle || "");
     setFiltroCategoriaLista(categoriaDetalle || "");
+    setVista("movimientos");
+  }
+
+  function verDetalleJair() {
+    setSoloJair(true);
+    setFiltro("Todos");
+    setFiltroEmpresa("Personal");
+    setFiltroFuente("Todas");
+    setFiltroCuenta("");
+    setFiltroCategoriaLista("");
+    setBusqueda("");
     setVista("movimientos");
   }
 
@@ -1473,6 +1637,7 @@ export default function Home() {
           </div>
           <div className="account-area">
             <span className={session ? "cloud-state online" : "cloud-state"}>{estadoNube}</span>
+            {session && <button className="sync-now" disabled={sincronizandoManual} onClick={sincronizarAhora}>{sincronizandoManual ? "Sincronizando…" : "Sincronizar ahora"}</button>}
             <button className="avatar" aria-label="Cuenta y sincronización" onClick={() => setModalCuenta(true)}>
               {session?.user.email?.slice(0, 2).toUpperCase() || "RS"}
             </button>
@@ -1512,7 +1677,7 @@ export default function Home() {
             <section>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Ingreso", "Personal"); }}>Ingresos del periodo <b>{soles(resumen.personal.ingresos)}</b></span>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Gasto", "Personal"); }}>Gastos reales <b>{soles(resumen.personal.gastos)}</b></span>
-              <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Transferencia", "Personal"); }}>Prestado a Jair <b>{soles(resumen.prestadoJair)}</b></span>
+              <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalleJair(); }}>Prestado a Jair <b>{soles(resumen.prestadoJair)}</b></span>
             </section>
           </article>
           <article className="card summary-unit sip-unit">
@@ -1679,7 +1844,7 @@ export default function Home() {
                 <h2>Presupuesto de {new Date(`${mesPresupuesto}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</h2>
               </div>
             </div>
-            <p className="budgets-hint">Solo considera gastos de la unidad Personal. Define cuánto quieres gastar como máximo en cada categoría este mes; déjalo en 0 para no controlar esa categoría.</p>
+            <p className="budgets-hint">Regla personal: el gasto total no debe superar {soles(limiteGastoMensual)} al mes. Pasajes, comida y deudas tienen límites propios; todas las demás categorías comparten una sola bolsa de {soles(limiteOtrosGastos)}.</p>
 
             {avancePresupuestos.totalLimite > 0 && (
               <div className="budget-overview">
@@ -1696,6 +1861,23 @@ export default function Home() {
                 </div>
               </div>
             )}
+
+            <div className="budget-card otros-card">
+              <div className="budget-card-head">
+                <span><i style={{ background: "#94a3b8" }} />Otros gastos (bolsa compartida)</span>
+              </div>
+              <div className="budget-numbers">
+                <b className={avancePresupuestos.otros.gastado > avancePresupuestos.otros.limite ? "gasto" : ""}>{soles(avancePresupuestos.otros.gastado)}</b>
+                <span>de {soles(avancePresupuestos.otros.limite)}</span>
+              </div>
+              <div className="monthly-progress"><i className={avancePresupuestos.otros.porcentaje > 100 ? "over" : ""} style={{ width: `${Math.min(100, avancePresupuestos.otros.porcentaje)}%` }} /></div>
+              <small className={avancePresupuestos.otros.gastado > avancePresupuestos.otros.limite ? "gasto" : ""}>
+                {avancePresupuestos.otros.gastado > avancePresupuestos.otros.limite
+                  ? `Superaste el límite en ${soles(avancePresupuestos.otros.gastado - avancePresupuestos.otros.limite)}`
+                  : `${soles(avancePresupuestos.otros.limite - avancePresupuestos.otros.gastado)} disponibles`}
+              </small>
+            </div>
+            <p className="budget-allocation-note"><b>Distribución:</b> Pasajes {soles(presupuestoPersonalDefault.Pasajes)} · Comida {soles(presupuestoPersonalDefault.Comida)} · Pago de deudas {soles(presupuestoPersonalDefault["Pago de deudas"])} · Otros {soles(limiteOtrosGastos)}. El apoyo mensual a tus papás se registra como Extras → Apoyo a padres.</p>
 
             <div className="budgets-grid">
               {avancePresupuestos.detalle.map((item) => (
@@ -1887,6 +2069,12 @@ export default function Home() {
                     <button onClick={() => setFiltroCategoriaLista("")} aria-label="Quitar filtro de categoría">×</button>
                   </span>
                 )}
+                {soloJair && (
+                  <span className="active-filter-chip">
+                    Solo Jair
+                    <button onClick={() => setSoloJair(false)} aria-label="Quitar filtro de Jair">×</button>
+                  </span>
+                )}
                 <input
                   aria-label="Buscar"
                   placeholder="Buscar..."
@@ -1958,7 +2146,14 @@ export default function Home() {
                       {movimiento.tipo === "ingreso" ? "+" : movimiento.tipo === "gasto" ? "−" : ""}
                       {soles(movimiento.monto)}
                     </strong>
-                    {movimiento.tipo === "gasto" && movimiento.categoria === "Pasajes" && <button className={`budget-flag ${movimiento.excluirPresupuesto ? "active" : ""}`} onClick={() => alternarPresupuesto(movimiento.id)}>{movimiento.excluirPresupuesto ? "Por encargo" : "Excluir de meta"}</button>}
+                    {movimiento.tipo === "gasto" && <button className={`budget-flag ${movimiento.excluirPresupuesto ? "active" : ""}`} onClick={() => alternarPresupuesto(movimiento.id)}>{movimiento.excluirPresupuesto ? "Por encargo" : "Excluir de presupuesto"}</button>}
+                    <button
+                      className="edit-movement"
+                      aria-label="Editar movimiento"
+                      onClick={() => editar(movimiento)}
+                    >
+                      Editar
+                    </button>
                     <button
                       className="delete"
                       aria-label="Eliminar"
@@ -2006,14 +2201,14 @@ export default function Home() {
       )}
 
       {modal && (
-        <div className="modal-backdrop" onMouseDown={() => setModal(false)}>
+        <div className="modal-backdrop" onMouseDown={cerrarModalMovimiento}>
           <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-            <button className="close" onClick={() => setModal(false)}>
+            <button className="close" onClick={cerrarModalMovimiento}>
               ×
             </button>
-            <span className="eyebrow">NUEVO REGISTRO</span>
-            <h2>Registrar movimiento</h2>
-            <p>Puedes cargar movimientos desde el 15 de junio de 2026.</p>
+            <span className="eyebrow">{movimientoEditando === null ? "NUEVO REGISTRO" : "EDITAR REGISTRO"}</span>
+            <h2>{movimientoEditando === null ? "Registrar movimiento" : "Modificar movimiento"}</h2>
+            <p>{movimientoEditando === null ? "Puedes cargar movimientos desde el 15 de junio de 2026." : "Los cambios actualizarán saldos, presupuestos y reportes."}</p>
             <form onSubmit={guardar}>
               <div className="type-toggle transfer-toggle">
                 <button
@@ -2187,7 +2382,7 @@ export default function Home() {
                 />
               </label>
               <button className="save" type="submit">
-                Guardar movimiento
+                {movimientoEditando === null ? "Guardar movimiento" : "Guardar cambios"}
               </button>
             </form>
           </div>
