@@ -1080,7 +1080,7 @@ export default function Home() {
             <div className="section-title">
               <div>
                 <span className="eyebrow">ACTIVIDAD</span>
-                <h2>Movimientos recientes</h2>
+                <h2>Historial de movimientos</h2>
               </div>
               <div className="filters">
                 <input
@@ -1120,7 +1120,7 @@ export default function Home() {
             </div>
             <div className="movement-list">
               {lista.length ? (
-                lista.slice(0, 8).map((movimiento) => (
+                lista.map((movimiento) => (
                   <div className="movement" key={movimiento.id}>
                     <span className={`movement-icon ${movimiento.tipo}`}>
                       {movimiento.tipo === "ingreso" ? "↓" : "↑"}
