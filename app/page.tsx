@@ -2,6 +2,7 @@
 
 import {
   ChangeEvent,
+  CSSProperties,
   FormEvent,
   useEffect,
   useMemo,
@@ -62,14 +63,7 @@ const categoriasDefault = [
   "Extras",
 ];
 const empresasDefault = ["Personal", "SS", "Clever"];
-const subcategoriasExtrasDefault = ["Apoyo a padres", "Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
-const presupuestoPersonalDefault: Record<string, number> = {
-  Pasajes: 400,
-  Comida: 300,
-  "Pago de deudas": 3300,
-};
-const limiteOtrosGastos = 300;
-const limiteGastoMensual = 4300;
+const subcategoriasExtrasDefault = ["Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
 const categoriasIngresoDefault = ["Sueldo", "Ventas o servicios", "Rendimientos de inversiones", "Aporte para gastos compartidos", "Aporte para ahorro", "Devolución de préstamo", "Otros ingresos", "Saldo inicial"];
 const fuentesDefault = [
   "Yape",
@@ -89,7 +83,7 @@ const paletaCategorias = ["#58c7a2", "#ff6b5f", "#9b7bf7", "#3e7bfa", "#f4b740",
 function colorCategoria(nombre: string, indice: number) {
   return colores[nombre] || paletaCategorias[indice % paletaCategorias.length];
 }
-const clasesTransferencia = ["Entre cuentas propias", "Aporte de capital", "Devolución de aporte", "Devolución de préstamo", "Distribución de utilidades", "Ahorro o inversión"];
+const clasesTransferencia = ["Entre cuentas propias", "Aporte de capital", "Devolución de aporte", "Distribución de utilidades", "Ahorro o inversión"];
 const colores: Record<string, string> = {
   Pasajes: "#58c7a2",
   Comida: "#ff6b5f",
@@ -107,14 +101,6 @@ const soles = (n: number) =>
     currency: "PEN",
   }).format(n);
 const hoy = () => new Date().toISOString().slice(0, 10);
-function ventanaIngresosMes(mes: string) {
-  const [anio, numeroMes] = mes.split("-").map(Number);
-  const anterior = numeroMes === 1
-    ? `${anio - 1}-12`
-    : `${anio}-${String(numeroMes - 1).padStart(2, "0")}`;
-  const ultimoDia = new Date(anio, numeroMes, 0).getDate();
-  return { desde: `${anterior}-25`, hasta: `${mes}-${String(ultimoDia).padStart(2, "0")}` };
-}
 const sinAcentos = (valor: string) =>
   valor
     .normalize("NFD")
@@ -380,19 +366,11 @@ function cuentaMovimiento(movimiento: Movimiento) {
 }
 
 function esPrestamoJair(movimiento: Movimiento) {
-  return movimiento.tipo === "gasto" && sinAcentos(movimiento.concepto).includes("jair");
-}
-
-function esMovimientoJair(movimiento: Movimiento) {
-  return esPrestamoJair(movimiento) ||
-    (movimiento.tipo === "transferencia" &&
-      (movimiento.claseTransferencia === "Devolución de préstamo" ||
-        movimiento.cuentaOrigen === "Préstamos a Jair" ||
-        sinAcentos(movimiento.concepto).includes("jair")));
+  return movimiento.tipo === "gasto" && movimiento.categoria === "Extras" && sinAcentos(movimiento.concepto).includes("jair");
 }
 
 function normalizarDevolucionJair(movimiento: Movimiento): Movimiento {
-  const esDevolucionRegistrada = movimiento.tipo !== "gasto" && movimiento.fecha === "2026-07-03" && movimiento.monto === 500 && sinAcentos(movimiento.concepto).includes("jair");
+  const esDevolucionRegistrada = movimiento.tipo === "ingreso" && movimiento.fecha === "2026-07-03" && movimiento.monto === 500 && sinAcentos(movimiento.concepto).includes("jair");
   if (!esDevolucionRegistrada) return movimiento;
   const cuentaRecibida = movimiento.detalleFuente || cuentaMovimiento(movimiento) || "BCP";
   return {
@@ -432,9 +410,10 @@ export default function Home() {
   const [fecha, setFecha] = useState(hoy());
   const [filtro, setFiltro] = useState("Todos");
   const [filtroFuente, setFiltroFuente] = useState("Todas");
+  const [filtroCuenta, setFiltroCuenta] = useState("");
+  const [filtroCategoriaLista, setFiltroCategoriaLista] = useState("");
   const [filtroMes, setFiltroMes] = useState("Todos");
   const [filtroEmpresa, setFiltroEmpresa] = useState("Todas");
-  const [soloJair, setSoloJair] = useState(false);
   const [vista, setVista] = useState<"inicio" | "movimientos" | "metas" | "presupuestos" | "reportes" | "ajustes">("inicio");
   const [presupuestos, setPresupuestos] = useState<Record<string, number>>({});
   const [presupuestosCargados, setPresupuestosCargados] = useState(false);
@@ -458,7 +437,6 @@ export default function Home() {
   const [procesandoCuenta, setProcesandoCuenta] = useState(false);
   const [nubeLista, setNubeLista] = useState(false);
   const [estadoNube, setEstadoNube] = useState("Guardado en este dispositivo");
-  const [sincronizandoManual, setSincronizandoManual] = useState(false);
   const [configuracionLista, setConfiguracionLista] = useState(false);
   const [categoriasGastoState, setCategoriasGastoState] = useState<string[]>([]);
   const [categoriasIngresoState, setCategoriasIngresoState] = useState<string[]>([]);
@@ -473,11 +451,9 @@ export default function Home() {
   const [nuevaEmpresa, setNuevaEmpresa] = useState("");
   const [empresaAjustes, setEmpresaAjustes] = useState("");
   const [nuevaCuenta, setNuevaCuenta] = useState("");
-  const [movimientoEditando, setMovimientoEditando] = useState<number | null>(null);
   const inputArchivo = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!authRevisada || !session) return;
     queueMicrotask(() => {
       const data = localStorage.getItem("mis-finanzas-movimientos");
       if (data) {
@@ -508,7 +484,7 @@ export default function Home() {
       }
       setCargado(true);
     });
-  }, [authRevisada, session]);
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -519,11 +495,6 @@ export default function Home() {
       setSession(nuevaSession);
       setAuthRevisada(true);
       if (!nuevaSession) {
-        setMovimientos([]);
-        setPresupuestos({});
-        setCargado(false);
-        setPresupuestosCargados(false);
-        setConfiguracionLista(false);
         setNubeLista(false);
         setEstadoNube("Guardado en este dispositivo");
       }
@@ -565,8 +536,8 @@ export default function Home() {
       }));
       setMovimientos((locales) => {
         const combinados = new Map<number, Movimiento>();
-        locales.forEach((item) => combinados.set(item.id, item));
         remotos.forEach((item) => combinados.set(item.id, item));
+        locales.forEach((item) => combinados.set(item.id, item));
         return Array.from(combinados.values());
       });
       setNubeLista(true);
@@ -577,7 +548,10 @@ export default function Home() {
   }, [session, cargado, nubeLista]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session) {
+      setConfiguracionLista(false);
+      return;
+    }
     let activo = true;
     async function cargarConfiguracion() {
       const [categoriasRes, subcategoriasRes, fuentesRes, empresasRes, cuentasRes] = await Promise.all([
@@ -632,7 +606,7 @@ export default function Home() {
 
   useEffect(() => {
     if (empresasState.length && !empresasState.includes(empresaAjustes)) {
-      queueMicrotask(() => setEmpresaAjustes(empresasState[0]));
+      setEmpresaAjustes(empresasState[0]);
     }
   }, [empresasState, empresaAjustes]);
 
@@ -743,7 +717,7 @@ export default function Home() {
         empresa_destino: item.empresaDestino || (item.tipo !== "gasto" ? item.empresa : null),
         cuenta_origen: item.cuentaOrigen || (item.tipo !== "ingreso" ? cuentaMovimiento(item) : null),
         cuenta_destino: item.cuentaDestino || (item.tipo === "transferencia" ? item.detalleFuente || null : item.tipo === "ingreso" ? cuentaMovimiento(item) : null),
-        clase_transferencia: item.claseTransferencia || null,
+        clase_transferencia: item.claseTransferencia || (item.tipo === "transferencia" ? "Entre cuentas propias" : null),
         excluir_presupuesto: item.excluirPresupuesto || false,
         updated_at: new Date().toISOString(),
       }));
@@ -754,107 +728,46 @@ export default function Home() {
         setEstadoNube("Error al guardar; se conserva copia local");
         return;
       }
-      setEstadoNube("Guardado en la nube");
+      const ids = movimientos.map((item) => item.id);
+      const borrado = ids.length
+        ? await supabase.from("movimientos").delete().eq("user_id", session.user.id).not("client_id", "in", `(${ids.join(",")})`)
+        : await supabase.from("movimientos").delete().eq("user_id", session.user.id);
+      setEstadoNube(borrado.error ? "Error al sincronizar; se conserva copia local" : "Guardado en la nube");
     }, 500);
     return () => window.clearTimeout(temporizador);
   }, [movimientos, session, nubeLista]);
 
-  async function sincronizarAhora() {
-    if (!session || sincronizandoManual) return;
-    setSincronizandoManual(true);
-    setEstadoNube("Sincronizando con la nube…");
-    try {
-      const copiaLocal = localStorage.getItem("mis-finanzas-movimientos");
-      const locales = copiaLocal ? JSON.parse(copiaLocal) as Movimiento[] : movimientos;
-      const filas = locales.map((item) => ({
-        user_id: session.user.id,
-        client_id: item.id,
-        tipo: item.tipo,
-        monto: item.monto,
-        concepto: item.concepto,
-        categoria: item.categoria,
-        fuente: item.fuente || "Otro",
-        detalle_fuente: item.detalleFuente || null,
-        fecha: item.fecha,
-        empresa: item.empresa || "Personal",
-        subcategoria: item.subcategoria || null,
-        empresa_origen: item.empresaOrigen || (item.tipo !== "ingreso" ? item.empresa : null),
-        empresa_destino: item.empresaDestino || (item.tipo !== "gasto" ? item.empresa : null),
-        cuenta_origen: item.cuentaOrigen || (item.tipo !== "ingreso" ? cuentaMovimiento(item) : null),
-        cuenta_destino: item.cuentaDestino || (item.tipo === "transferencia" ? item.detalleFuente || null : item.tipo === "ingreso" ? cuentaMovimiento(item) : null),
-        clase_transferencia: item.claseTransferencia || null,
-        excluir_presupuesto: item.excluirPresupuesto || false,
-        updated_at: new Date().toISOString(),
-      }));
-      const guardado = filas.length
-        ? await supabase.from("movimientos").upsert(filas, { onConflict: "user_id,client_id" })
-        : { error: null };
-      if (guardado.error) throw guardado.error;
-
-      const { data, error } = await supabase
-        .from("movimientos")
-        .select("client_id,tipo,monto,concepto,categoria,fuente,detalle_fuente,fecha,empresa,subcategoria,empresa_origen,empresa_destino,cuenta_origen,cuenta_destino,clase_transferencia,excluir_presupuesto")
-        .order("fecha", { ascending: false });
-      if (error) throw error;
-      const remotos: Movimiento[] = (data || []).map((item) => normalizarDevolucionJair({
-        id: Number(item.client_id), tipo: item.tipo as Tipo, monto: Number(item.monto),
-        concepto: item.concepto, categoria: item.categoria, fuente: item.fuente,
-        detalleFuente: item.detalle_fuente || "", fecha: item.fecha,
-        empresa: item.empresa || "Personal", subcategoria: item.subcategoria || "",
-        empresaOrigen: item.empresa_origen || undefined, empresaDestino: item.empresa_destino || undefined,
-        cuentaOrigen: item.cuenta_origen || undefined, cuentaDestino: item.cuenta_destino || undefined,
-        claseTransferencia: item.clase_transferencia || undefined,
-        excluirPresupuesto: item.excluir_presupuesto || false,
-      }));
-      const combinados = new Map<number, Movimiento>();
-      locales.forEach((item) => combinados.set(item.id, item));
-      remotos.forEach((item) => combinados.set(item.id, item));
-      const resultado = Array.from(combinados.values());
-      setMovimientos(resultado);
-      localStorage.setItem("mis-finanzas-movimientos", JSON.stringify(resultado));
-      setNubeLista(true);
-      setEstadoNube("Guardado en la nube");
-    } catch {
-      setEstadoNube("Error al sincronizar; se conserva copia local");
-    } finally {
-      setSincronizandoManual(false);
-    }
-  }
-
   useEffect(() => {
-    if (session && cargado) {
+    if (cargado) {
       localStorage.setItem(
         "mis-finanzas-movimientos",
         JSON.stringify(movimientos),
       );
     }
-  }, [movimientos, cargado, session]);
+  }, [movimientos, cargado]);
 
   useEffect(() => {
-    if (!session) return;
     queueMicrotask(() => {
       const data = localStorage.getItem("mis-finanzas-presupuestos");
       if (data) {
         try {
-          setPresupuestos({ ...presupuestoPersonalDefault, ...JSON.parse(data) });
+          setPresupuestos(JSON.parse(data));
         } catch {
-          setPresupuestos(presupuestoPersonalDefault);
+          setPresupuestos({});
         }
-      } else {
-        setPresupuestos(presupuestoPersonalDefault);
       }
       setPresupuestosCargados(true);
     });
-  }, [session]);
+  }, []);
 
   useEffect(() => {
-    if (session && presupuestosCargados) {
+    if (presupuestosCargados) {
       localStorage.setItem(
         "mis-finanzas-presupuestos",
         JSON.stringify(presupuestos),
       );
     }
-  }, [presupuestos, presupuestosCargados, session]);
+  }, [presupuestos, presupuestosCargados]);
 
   function actualizarPresupuesto(categoriaNombre: string, valor: string) {
     const numero = Number(valor);
@@ -904,12 +817,6 @@ export default function Home() {
     const movimientosMes = filtroMes === "Todos"
       ? movimientos
       : movimientos.filter((item) => item.fecha.startsWith(filtroMes));
-    const ingresosMes = filtroMes === "Todos"
-      ? movimientos.filter((item) => item.tipo === "ingreso")
-      : movimientos.filter((item) => {
-          const ventana = ventanaIngresosMes(filtroMes);
-          return item.tipo === "ingreso" && item.fecha >= ventana.desde && item.fecha <= ventana.hasta;
-        });
     const movimientosPeriodo = filtroEmpresa === "Todas"
       ? movimientosMes
       : movimientosMes.filter((item) =>
@@ -917,10 +824,7 @@ export default function Home() {
             ? item.empresaOrigen === filtroEmpresa || item.empresaDestino === filtroEmpresa
             : item.empresa === filtroEmpresa,
         );
-    const ingresosPeriodo = filtroEmpresa === "Todas"
-      ? ingresosMes
-      : ingresosMes.filter((item) => item.empresa === filtroEmpresa);
-    const ingresos = ingresosPeriodo
+    const ingresos = movimientosPeriodo
       .filter((movimiento) => movimiento.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(movimiento.categoria))
       .reduce((total, movimiento) => total + movimiento.monto, 0);
     const gastos = movimientosPeriodo
@@ -973,7 +877,7 @@ export default function Home() {
       .sort((a, b) => b.total - a.total);
     const porEmpresa = empresas.map((nombre) => {
       const items = movimientosMes.filter((item) => item.tipo !== "transferencia" && item.empresa === nombre);
-      const ingresosEmpresa = ingresosMes.filter((item) => item.empresa === nombre && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)).reduce((total, item) => total + item.monto, 0);
+      const ingresosEmpresa = items.filter((item) => item.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)).reduce((total, item) => total + item.monto, 0);
       const gastosEmpresa = items.filter((item) => item.tipo === "gasto" && !esPrestamoJair(item)).reduce((total, item) => total + item.monto, 0);
       const movimientosBalance = filtroMes === "Todos" ? movimientos : movimientos.filter((item) => item.fecha <= `${filtroMes}-31`);
       const saldos = new Map<string, number>();
@@ -1013,9 +917,9 @@ export default function Home() {
 
   const avancePresupuestos = useMemo(() => {
     const movimientosMes = movimientos.filter(
-      (item) => item.tipo === "gasto" && item.empresa === "Personal" && !item.excluirPresupuesto && !esPrestamoJair(item) && item.fecha.startsWith(mesPresupuesto),
+      (item) => item.tipo === "gasto" && !esPrestamoJair(item) && !item.excluirPresupuesto && item.fecha.startsWith(mesPresupuesto),
     );
-    const porCategoria = categorias.map((nombre) => {
+    return categorias.map((nombre) => {
       const gastado = movimientosMes
         .filter((item) => item.categoria === nombre)
         .reduce((total, item) => total + item.monto, 0);
@@ -1027,31 +931,19 @@ export default function Home() {
         porcentaje: limite ? (gastado / limite) * 100 : 0,
       };
     });
-    const categoriasPrincipales = new Set(["Pasajes", "Comida", "Pago de deudas"]);
-    const otrosGastado = movimientosMes
-      .filter((item) => !categoriasPrincipales.has(item.categoria))
-      .reduce((total, item) => total + item.monto, 0);
-    const totalGastado = movimientosMes.reduce((total, item) => total + item.monto, 0);
-    return {
-      porCategoria,
-      otros: { gastado: otrosGastado, limite: limiteOtrosGastos, porcentaje: (otrosGastado / limiteOtrosGastos) * 100 },
-      total: { gastado: totalGastado, limite: limiteGastoMensual, porcentaje: (totalGastado / limiteGastoMensual) * 100 },
-    };
   }, [movimientos, presupuestos, mesPresupuesto, categorias]);
 
   const reporteMensual = useMemo(() => {
     const porMes = new Map<string, { ingresos: number; gastos: number }>();
-    const mesesReporte = Array.from(new Set(movimientos.map((item) => item.fecha.slice(0, 7))));
-    mesesReporte.forEach((mes) => {
+    movimientos.forEach((item) => {
+      const mes = item.fecha.slice(0, 7);
       if (!porMes.has(mes)) porMes.set(mes, { ingresos: 0, gastos: 0 });
       const registro = porMes.get(mes)!;
-      const ventana = ventanaIngresosMes(mes);
-      registro.ingresos = movimientos
-        .filter((item) => item.tipo === "ingreso" && item.fecha >= ventana.desde && item.fecha <= ventana.hasta && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria))
-        .reduce((total, item) => total + item.monto, 0);
-      registro.gastos = movimientos
-        .filter((item) => item.tipo === "gasto" && item.fecha.startsWith(mes) && !esPrestamoJair(item))
-        .reduce((total, item) => total + item.monto, 0);
+      if (item.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)) {
+        registro.ingresos += item.monto;
+      } else if (item.tipo === "gasto" && !esPrestamoJair(item)) {
+        registro.gastos += item.monto;
+      }
     });
     const meses = Array.from(porMes.entries())
       .map(([mes, valores]) => ({ mes, ...valores, ahorro: valores.ingresos - valores.gastos }))
@@ -1067,11 +959,12 @@ export default function Home() {
         (filtro === "Todos" || movimiento.tipo === filtro.toLowerCase()) &&
         (filtroFuente === "Todas" ||
           (movimiento.fuente || "Otro") === filtroFuente) &&
+        (!filtroCuenta || sinAcentos(movimiento.cuentaDestino || movimiento.cuentaOrigen || cuentaMovimiento(movimiento)).includes(filtroCuenta)) &&
+        (!filtroCategoriaLista || movimiento.categoria === filtroCategoriaLista) &&
         (filtroMes === "Todos" || movimiento.fecha.startsWith(filtroMes)) &&
         (filtroEmpresa === "Todas" || (movimiento.tipo === "transferencia"
           ? movimiento.empresaOrigen === filtroEmpresa || movimiento.empresaDestino === filtroEmpresa
           : movimiento.empresa === filtroEmpresa)) &&
-        (!soloJair || esMovimientoJair(movimiento)) &&
         movimiento.concepto.toLowerCase().includes(busqueda.toLowerCase()),
     )
     .sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -1097,8 +990,9 @@ export default function Home() {
     const detalleCalculado = detalleAutomatico(fuente);
     const cuentaSeleccionada = detalleCalculado || detalleFuente.trim() || fuente;
     const esDevolucionJair = tipo === "ingreso" && categoriaIngreso === "Devolución de préstamo";
-    const movimientoGuardado: Movimiento = {
-        id: movimientoEditando ?? Date.now(),
+    setMovimientos((anteriores) => [
+      {
+        id: Date.now(),
         tipo: esDevolucionJair ? "transferencia" : tipo,
         monto: valor,
         concepto: concepto.trim() || (esDevolucionJair ? "Devolución de préstamo de Jair" : tipo === "transferencia" ? "Transferencia propia" : "Sin concepto"),
@@ -1114,10 +1008,9 @@ export default function Home() {
         cuentaDestino: esDevolucionJair ? cuentaSeleccionada : tipo === "gasto" ? undefined : tipo === "transferencia" ? cuentaDestino : cuentaSeleccionada,
         claseTransferencia: esDevolucionJair ? "Devolución de préstamo" : tipo === "transferencia" ? claseTransferencia : undefined,
         excluirPresupuesto: tipo === "gasto" && categoria === "Pasajes" ? excluirPresupuesto : false,
-      };
-    setMovimientos((anteriores) => movimientoEditando === null
-      ? [movimientoGuardado, ...anteriores]
-      : anteriores.map((movimiento) => movimiento.id === movimientoEditando ? movimientoGuardado : movimiento));
+      },
+      ...anteriores,
+    ]);
     setMonto("");
     setConcepto("");
     setDetalleFuente("");
@@ -1130,65 +1023,22 @@ export default function Home() {
     setSubcategoria("Otros");
     setCategoriaIngreso("Sueldo");
     setFecha(hoy());
-    setMovimientoEditando(null);
     setModal(false);
   }
 
-  function editar(movimiento: Movimiento) {
-    setMovimientoEditando(movimiento.id);
-    setTipo(movimiento.tipo);
-    setMonto(String(movimiento.monto));
-    setConcepto(movimiento.concepto === "Sin concepto" ? "" : movimiento.concepto);
-    setCategoria(movimiento.tipo === "gasto" ? movimiento.categoria : categorias[0] || "Comida");
-    setCategoriaIngreso(movimiento.tipo === "ingreso" ? movimiento.categoria : "Sueldo");
-    setEmpresa(movimiento.empresa || "Personal");
-    setSubcategoria(movimiento.subcategoria || "Otros");
-    setFuente(movimiento.tipo === "transferencia" ? "Transferencia" : movimiento.fuente || "Otro");
-    setDetalleFuente(movimiento.tipo === "transferencia" ? "" : movimiento.detalleFuente || "");
-    setEmpresaOrigen(movimiento.empresaOrigen || movimiento.empresa || "Personal");
-    setEmpresaDestino(movimiento.empresaDestino || movimiento.empresa || "Personal");
-    setCuentaOrigen(movimiento.cuentaOrigen || movimiento.fuente || "BCP");
-    setCuentaDestino(movimiento.cuentaDestino || movimiento.detalleFuente || "IBK");
-    setClaseTransferencia(movimiento.claseTransferencia || "Entre cuentas propias");
-    setExcluirPresupuesto(Boolean(movimiento.excluirPresupuesto));
-    setFecha(movimiento.fecha);
-    setModal(true);
-  }
-
-  function cerrarModalMovimiento() {
-    setMovimientoEditando(null);
-    setModal(false);
-  }
-
-  async function borrar(id: number) {
-    if (!session || !confirm("¿Eliminar este movimiento?")) return;
-    setEstadoNube("Eliminando de la nube…");
-    const { error } = await supabase
-      .from("movimientos")
-      .delete()
-      .eq("user_id", session.user.id)
-      .eq("client_id", id);
-    if (error) {
-      setEstadoNube("No se pudo eliminar; el movimiento se conserva");
-      return;
+  function borrar(id: number) {
+    if (confirm("¿Eliminar este movimiento?")) {
+      setMovimientos((anteriores) =>
+        anteriores.filter((movimiento) => movimiento.id !== id),
+      );
     }
-    setMovimientos((anteriores) => anteriores.filter((movimiento) => movimiento.id !== id));
-    setEstadoNube("Guardado en la nube");
   }
 
-  function verDetalle(tipoDetalle: "Todos" | "Ingreso" | "Gasto" | "Transferencia", empresaDetalle?: Empresa | "Todas") {
-    setSoloJair(false);
+  function verDetalle(tipoDetalle: "Todos" | "Ingreso" | "Gasto" | "Transferencia", empresaDetalle?: Empresa | "Todas", cuentaDetalle?: string, categoriaDetalle?: string) {
     setFiltro(tipoDetalle);
     if (empresaDetalle) setFiltroEmpresa(empresaDetalle);
-    setVista("movimientos");
-  }
-
-  function verDetalleJair() {
-    setSoloJair(true);
-    setFiltro("Todos");
-    setFiltroEmpresa("Personal");
-    setFiltroFuente("Todas");
-    setBusqueda("");
+    setFiltroCuenta(cuentaDetalle || "");
+    setFiltroCategoriaLista(categoriaDetalle || "");
     setVista("movimientos");
   }
 
@@ -1570,9 +1420,6 @@ export default function Home() {
           <button className={vista === "presupuestos" ? "active" : ""} onClick={() => setVista("presupuestos")}>
             ◔ <span>Presupuestos</span>
           </button>
-          <button className={vista === "metas" ? "active" : ""} onClick={() => setVista("metas")}>
-            ◎ <span>Metas</span>
-          </button>
           <button className={vista === "reportes" ? "active" : ""} onClick={() => setVista("reportes")}>
             ▥ <span>Reportes</span>
           </button>
@@ -1606,7 +1453,6 @@ export default function Home() {
           </div>
           <div className="account-area">
             <span className={session ? "cloud-state online" : "cloud-state"}>{estadoNube}</span>
-            <button className="sync-now" disabled={sincronizandoManual} onClick={sincronizarAhora}>{sincronizandoManual ? "Sincronizando…" : "Sincronizar ahora"}</button>
             <button className="avatar" aria-label="Cuenta y sincronización" onClick={() => setModalCuenta(true)}>
               {session?.user.email?.slice(0, 2).toUpperCase() || "RS"}
             </button>
@@ -1616,13 +1462,8 @@ export default function Home() {
         {vista !== "ajustes" && <div className="scope-bar card">
           {vista !== "metas" && vista !== "presupuestos" && vista !== "reportes" && <div><span>Unidad</span><select value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)}><option>Todas</option>{empresas.map((item) => <option key={item}>{item}</option>)}</select></div>}
           <div><span>Periodo</span><select value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)}><option value="Todos">Todos los meses</option>{mesesDisponibles.map((mes) => <option key={mes} value={mes}>{new Date(`${mes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</option>)}</select></div>
-          <button onClick={() => { setMovimientoEditando(null); setModal(true); }}>＋ Nuevo movimiento</button>
+          <button onClick={() => setModal(true)}>＋ Nuevo movimiento</button>
         </div>}
-
-        {vista === "inicio" && filtroMes !== "Todos" && (() => {
-          const ventana = ventanaIngresosMes(filtroMes);
-          return <p className="financial-period-note">Mes financiero: ingresos del {new Date(`${ventana.desde}T12:00:00`).toLocaleDateString("es-PE", { day: "2-digit", month: "short" })} al {new Date(`${ventana.hasta}T12:00:00`).toLocaleDateString("es-PE", { day: "2-digit", month: "short" })}; gastos del 01 al fin de {new Date(`${filtroMes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long" })}. Las transferencias propias no afectan el resultado.</p>;
-        })()}
 
         {vista === "inicio" && <section className="financial-summary">
           <article className="card summary-unit personal-unit" onClick={() => setFiltroEmpresa("Personal")}>
@@ -1633,7 +1474,7 @@ export default function Home() {
             <section>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Ingreso", "Personal"); }}>Ingresos del periodo <b>{soles(resumen.personal.ingresos)}</b></span>
               <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Gasto", "Personal"); }}>Gastos reales <b>{soles(resumen.personal.gastos)}</b></span>
-              <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalleJair(); }}>Prestado a Jair <b>{soles(resumen.prestadoJair)}</b></span>
+              <span className="detail-link" onClick={(e) => { e.stopPropagation(); verDetalle("Transferencia", "Personal"); }}>Prestado a Jair <b>{soles(resumen.prestadoJair)}</b></span>
             </section>
           </article>
           <article className="card summary-unit sip-unit">
@@ -1643,8 +1484,8 @@ export default function Home() {
             <p>Meta {soles(40000)} · {Math.min(100, Math.max(0, (resumen.sip / 40000) * 100)).toFixed(1)}% alcanzado</p>
             <div className="goal-progress"><i style={{ width: `${Math.min(100, Math.max(0, (resumen.sip / 40000) * 100))}%` }} /></div>
             <section>
-              <span className="detail-link" onClick={() => verDetalle("Transferencia", "Personal")}>Depósitos del periodo <b>{soles(resumen.aportesSip)}</b></span>
-              <span className="detail-link" onClick={() => verDetalle("Ingreso", "Personal")}>Intereses del periodo <b>{soles(resumen.interesesSip)}</b></span>
+              <span className="detail-link" onClick={() => verDetalle("Transferencia", "Personal", "sip")}>Depósitos del periodo <b>{soles(resumen.aportesSip)}</b></span>
+              <span className="detail-link" onClick={() => verDetalle("Ingreso", "Personal", "sip")}>Intereses del periodo <b>{soles(resumen.interesesSip)}</b></span>
               <span>Falta para la meta <b>{soles(Math.max(0, 40000 - resumen.sip))}</b></span>
             </section>
           </article>
@@ -1717,14 +1558,25 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="legend">
-                  {resumen.porCategoria.map((item, indice) => (
-                    <div key={item.nombre}>
-                      <i style={{ background: colorCategoria(item.nombre, indice) }} />
-                      <span>{item.nombre}</span>
-                      <b>{Math.round((item.total / resumen.gastos) * 100)}%</b>
-                      <small>{soles(item.total)}</small>
-                    </div>
-                  ))}
+                  {resumen.porCategoria.map((item, indice) => {
+                    const porcentaje = Math.round((item.total / resumen.gastos) * 100);
+                    return (
+                      <div
+                        className="legend-row"
+                        key={item.nombre}
+                        style={{ "--barra": `${porcentaje}%`, "--color": colorCategoria(item.nombre, indice) } as CSSProperties}
+                        onClick={() => verDetalle("Gasto", "Todas", undefined, item.nombre)}
+                      >
+                        <div className="legend-top">
+                          <i style={{ background: colorCategoria(item.nombre, indice) }} />
+                          <span>{item.nombre}</span>
+                          <b>{porcentaje}%</b>
+                          <small>{soles(item.total)}</small>
+                        </div>
+                        <div className="legend-bar"><i /></div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1746,9 +1598,15 @@ export default function Home() {
                   </div>
                   {extrasAbierto === item.nombre && (
                     <div className="extras-conceptos">
-                      {item.conceptos.map((concepto) => (
-                        <div key={concepto.concepto}><span>{concepto.concepto}</span><b>{soles(concepto.total)}</b></div>
-                      ))}
+                      {item.conceptos.map((concepto) => {
+                        const maximo = item.conceptos[0]?.total || 1;
+                        return (
+                          <div className="extras-concepto-row" key={concepto.concepto}>
+                            <div className="extras-concepto-top"><span>{concepto.concepto}</span><b>{soles(concepto.total)}</b></div>
+                            <div className="extras-concepto-bar"><i style={{ "--w": `${(concepto.total / maximo) * 100}%` } as CSSProperties} /></div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1779,19 +1637,9 @@ export default function Home() {
                 <h2>Presupuesto de {new Date(`${mesPresupuesto}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</h2>
               </div>
             </div>
-            <p className="budgets-hint">Regla personal: el gasto total no debe superar S/4,300 al mes. Pasajes, comida y deudas tienen límites propios; todas las demás categorías comparten una sola bolsa de S/300.</p>
-            <div className="budget-rules-summary">
-              {[{ nombre: "Total mensual", ...avancePresupuestos.total }, { nombre: "Otros gastos", ...avancePresupuestos.otros }].map((item) => (
-                <div className="budget-rule-card" key={item.nombre}>
-                  <div><span>{item.nombre}</span><b className={item.gastado > item.limite ? "gasto" : ""}>{soles(item.gastado)} de {soles(item.limite)}</b></div>
-                  <div className="monthly-progress"><i className={item.porcentaje > 100 ? "over" : ""} style={{ width: `${Math.min(100, item.porcentaje)}%` }} /></div>
-                  <small className={item.gastado > item.limite ? "gasto" : ""}>{item.gastado > item.limite ? `Exceso: ${soles(item.gastado - item.limite)}` : `Disponible: ${soles(item.limite - item.gastado)}`}</small>
-                </div>
-              ))}
-            </div>
-            <p className="budget-allocation-note"><b>Distribución:</b> Pasajes S/400 · Comida S/300 · Pago de deudas S/3,300 · Otros S/300. El apoyo mensual de S/200 a tus papás se registra como Extras → Apoyo a padres.</p>
+            <p className="budgets-hint">Define cuánto quieres gastar como máximo en cada categoría este mes. Se guarda en este dispositivo; déjalo en 0 para no controlar esa categoría.</p>
             <div className="budgets-grid">
-              {avancePresupuestos.porCategoria.map((item) => (
+              {avancePresupuestos.map((item) => (
                 <div className="budget-card" key={item.nombre}>
                   <div className="budget-card-head">
                     <span><i style={{ background: colores[item.nombre] || "#94a3b8" }} />{item.nombre}</span>
@@ -1968,6 +1816,18 @@ export default function Home() {
                 <h2>Historial de movimientos</h2>
               </div>
               <div className="filters">
+                {filtroCuenta && (
+                  <span className="active-filter-chip">
+                    Cuenta: {filtroCuenta.toUpperCase()}
+                    <button onClick={() => setFiltroCuenta("")} aria-label="Quitar filtro de cuenta">×</button>
+                  </span>
+                )}
+                {filtroCategoriaLista && (
+                  <span className="active-filter-chip">
+                    {filtroCategoriaLista}
+                    <button onClick={() => setFiltroCategoriaLista("")} aria-label="Quitar filtro de categoría">×</button>
+                  </span>
+                )}
                 <input
                   aria-label="Buscar"
                   placeholder="Buscar..."
@@ -2014,7 +1874,6 @@ export default function Home() {
               ))}
             </div>
             <div className="movement-list">
-              {soloJair && <div className="active-detail-filter"><span>Mostrando únicamente movimientos de Jair</span><button onClick={() => setSoloJair(false)}>Ver todos</button></div>}
               {lista.length ? (
                 lista.map((movimiento) => (
                   <div className="movement" key={movimiento.id}>
@@ -2041,13 +1900,6 @@ export default function Home() {
                       {soles(movimiento.monto)}
                     </strong>
                     {movimiento.tipo === "gasto" && movimiento.categoria === "Pasajes" && <button className={`budget-flag ${movimiento.excluirPresupuesto ? "active" : ""}`} onClick={() => alternarPresupuesto(movimiento.id)}>{movimiento.excluirPresupuesto ? "Por encargo" : "Excluir de meta"}</button>}
-                    <button
-                      className="edit-movement"
-                      aria-label="Editar movimiento"
-                      onClick={() => editar(movimiento)}
-                    >
-                      Editar
-                    </button>
                     <button
                       className="delete"
                       aria-label="Eliminar"
@@ -2095,14 +1947,14 @@ export default function Home() {
       )}
 
       {modal && (
-        <div className="modal-backdrop" onMouseDown={cerrarModalMovimiento}>
+        <div className="modal-backdrop" onMouseDown={() => setModal(false)}>
           <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-            <button className="close" onClick={cerrarModalMovimiento}>
+            <button className="close" onClick={() => setModal(false)}>
               ×
             </button>
-            <span className="eyebrow">{movimientoEditando === null ? "NUEVO REGISTRO" : "EDITAR REGISTRO"}</span>
-            <h2>{movimientoEditando === null ? "Registrar movimiento" : "Modificar movimiento"}</h2>
-            <p>{movimientoEditando === null ? "Puedes cargar movimientos desde el 15 de junio de 2026." : "Los cambios actualizarán saldos, presupuestos y reportes."}</p>
+            <span className="eyebrow">NUEVO REGISTRO</span>
+            <h2>Registrar movimiento</h2>
+            <p>Puedes cargar movimientos desde el 15 de junio de 2026.</p>
             <form onSubmit={guardar}>
               <div className="type-toggle transfer-toggle">
                 <button
@@ -2276,7 +2128,7 @@ export default function Home() {
                 />
               </label>
               <button className="save" type="submit">
-                {movimientoEditando === null ? "Guardar movimiento" : "Guardar cambios"}
+                Guardar movimiento
               </button>
             </form>
           </div>
