@@ -51,12 +51,12 @@ const categorias = [
   "Ropa",
   "Extras",
 ];
-const detallesIngreso = ["Sueldo", "SIP", "Jair", "SS", "Otros"];
 const fuentes = [
   "Yape",
   "Plin",
   "Tarjeta",
   "Transferencia",
+  "SIP",
   "Efectivo",
   "Otro",
 ];
@@ -322,6 +322,17 @@ function claveMovimiento(movimiento: Movimiento) {
   ].join("|");
 }
 
+function detalleAutomatico(fuente: string) {
+  const automaticos: Record<string, string> = {
+    Yape: "BCP",
+    Transferencia: "BCP",
+    Plin: "IBK",
+    Tarjeta: "Tarjeta",
+    SIP: "SIP",
+  };
+  return automaticos[fuente] || "";
+}
+
 export default function Home() {
   const [movimientos, setMovimientos] = useState<Movimiento[]>(iniciales);
   const [modal, setModal] = useState(false);
@@ -534,16 +545,17 @@ export default function Home() {
   function guardar(e: FormEvent) {
     e.preventDefault();
     const valor = Number(monto);
-    if (!valor || !concepto.trim()) return;
+    if (!valor) return;
+    const detalleCalculado = detalleAutomatico(fuente);
     setMovimientos((anteriores) => [
       {
         id: Date.now(),
         tipo,
         monto: valor,
-        concepto: concepto.trim(),
+        concepto: concepto.trim() || "Sin concepto",
         categoria: tipo === "ingreso" ? "Ingresos" : categoria,
         fuente,
-        detalleFuente: detalleFuente.trim(),
+        detalleFuente: detalleCalculado || detalleFuente.trim(),
         fecha,
       },
       ...anteriores,
@@ -1247,13 +1259,12 @@ export default function Home() {
                 />
               </label>
               {tipo === "gasto" && (
-                <label>
-                  Concepto
+              <label>
+                  Concepto (opcional)
                   <input
                     placeholder="Ej. Almuerzo, pago de tarjeta"
                     value={concepto}
                     onChange={(e) => setConcepto(e.target.value)}
-                    required
                   />
                 </label>
               )}
@@ -1261,50 +1272,36 @@ export default function Home() {
                 Medio de pago o fuente
                 <select
                   value={fuente}
-                  onChange={(e) => setFuente(e.target.value)}
+                  onChange={(e) => {
+                    setFuente(e.target.value);
+                    setDetalleFuente("");
+                  }}
                 >
                   {fuentes.map((item) => (
                     <option key={item}>{item}</option>
                   ))}
                 </select>
               </label>
-              {tipo === "ingreso" ? (
-                <label>
-                  Detalle de la fuente
-                  <select
-                    value={detalleFuente}
-                    onChange={(e) => setDetalleFuente(e.target.value)}
-                  >
-                    <option value="">Seleccionar</option>
-                    {detallesIngreso.map((item) => (
-                      <option key={item}>{item}</option>
-                    ))}
-                  </select>
-                </label>
-              ) : (
-                <label>
-                  {fuente === "Tarjeta"
-                    ? "¿Qué tarjeta utilizaste?"
-                    : "Detalle de la fuente (opcional)"}
-                  <input
-                    placeholder={
-                      fuente === "Tarjeta"
-                        ? "Ej. BCP Visa, Interbank, Ripley"
-                        : "Ej. Cuenta BCP, billetera personal"
-                    }
-                    value={detalleFuente}
-                    onChange={(e) => setDetalleFuente(e.target.value)}
-                  />
-                </label>
-              )}
+              <label>
+                Detalle de la fuente
+                <input
+                  placeholder={
+                    fuente === "Efectivo" || fuente === "Otro"
+                      ? "Escribe el detalle"
+                      : "Se completa automáticamente"
+                  }
+                  value={detalleAutomatico(fuente) || detalleFuente}
+                  readOnly={Boolean(detalleAutomatico(fuente))}
+                  onChange={(e) => setDetalleFuente(e.target.value)}
+                />
+              </label>
               {tipo === "ingreso" && (
                 <label>
-                  Concepto
+                  Concepto (opcional)
                   <input
                     placeholder="Ej. Sueldo, devolución, depósito"
                     value={concepto}
                     onChange={(e) => setConcepto(e.target.value)}
-                    required
                   />
                 </label>
               )}
