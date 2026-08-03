@@ -12,7 +12,7 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
 type Tipo = "ingreso" | "gasto" | "transferencia";
-type Empresa = "SS" | "Clever" | "Personal";
+type Empresa = string;
 type Movimiento = {
   id: number;
   tipo: Tipo;
@@ -51,7 +51,7 @@ type ArchivoImportado = {
   positivosSon: Tipo;
 };
 
-const categorias = [
+const categoriasDefault = [
   "Pasajes",
   "Comida",
   "Salud",
@@ -61,10 +61,10 @@ const categorias = [
   "Ropa",
   "Extras",
 ];
-const empresas = ["Personal", "SS", "Clever"] as const;
-const subcategoriasExtras = ["Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
-const categoriasIngreso = ["Sueldo", "Ventas o servicios", "Rendimientos de inversiones", "Aporte para gastos compartidos", "Aporte para ahorro", "Devolución de préstamo", "Otros ingresos", "Saldo inicial"];
-const fuentes = [
+const empresasDefault = ["Personal", "SS", "Clever"];
+const subcategoriasExtrasDefault = ["Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
+const categoriasIngresoDefault = ["Sueldo", "Ventas o servicios", "Rendimientos de inversiones", "Aporte para gastos compartidos", "Aporte para ahorro", "Devolución de préstamo", "Otros ingresos", "Saldo inicial"];
+const fuentesDefault = [
   "Yape",
   "Plin",
   "Tarjeta",
@@ -73,11 +73,15 @@ const fuentes = [
   "Efectivo",
   "Otro",
 ];
-const cuentasPorEmpresa: Record<Empresa, string[]> = {
+const cuentasPorEmpresaDefault: Record<string, string[]> = {
   Personal: ["BCP", "IBK", "Yape", "Plin", "Efectivo", "SIP", "Préstamos a Jair", "Tarjeta", "Otro"],
   SS: ["Cuenta SS", "Efectivo SS", "Otro"],
   Clever: ["Cuenta Clever", "Efectivo Clever", "Otro"],
 };
+const paletaCategorias = ["#58c7a2", "#ff6b5f", "#9b7bf7", "#3e7bfa", "#f4b740", "#ee7fb2", "#94a3b8", "#7b91b8", "#e6a23c", "#5cb8b2", "#c17ed1", "#7fa8d9"];
+function colorCategoria(nombre: string, indice: number) {
+  return colores[nombre] || paletaCategorias[indice % paletaCategorias.length];
+}
 const clasesTransferencia = ["Entre cuentas propias", "Aporte de capital", "Devolución de aporte", "Distribución de utilidades", "Ahorro o inversión"];
 const colores: Record<string, string> = {
   Pasajes: "#58c7a2",
@@ -392,7 +396,7 @@ export default function Home() {
   const [monto, setMonto] = useState("");
   const [concepto, setConcepto] = useState("");
   const [categoria, setCategoria] = useState("Comida");
-  const [empresa, setEmpresa] = useState<(typeof empresas)[number]>("Personal");
+  const [empresa, setEmpresa] = useState<Empresa>("Personal");
   const [subcategoria, setSubcategoria] = useState("Otros");
   const [categoriaIngreso, setCategoriaIngreso] = useState("Sueldo");
   const [fuente, setFuente] = useState("Yape");
@@ -407,7 +411,7 @@ export default function Home() {
   const [filtroFuente, setFiltroFuente] = useState("Todas");
   const [filtroMes, setFiltroMes] = useState("Todos");
   const [filtroEmpresa, setFiltroEmpresa] = useState("Todas");
-  const [vista, setVista] = useState<"inicio" | "movimientos" | "metas" | "presupuestos" | "reportes">("inicio");
+  const [vista, setVista] = useState<"inicio" | "movimientos" | "metas" | "presupuestos" | "reportes" | "ajustes">("inicio");
   const [presupuestos, setPresupuestos] = useState<Record<string, number>>({});
   const [presupuestosCargados, setPresupuestosCargados] = useState(false);
   const [excluirPresupuesto, setExcluirPresupuesto] = useState(false);
@@ -430,6 +434,20 @@ export default function Home() {
   const [procesandoCuenta, setProcesandoCuenta] = useState(false);
   const [nubeLista, setNubeLista] = useState(false);
   const [estadoNube, setEstadoNube] = useState("Guardado en este dispositivo");
+  const [configuracionLista, setConfiguracionLista] = useState(false);
+  const [categoriasGastoState, setCategoriasGastoState] = useState<string[]>([]);
+  const [categoriasIngresoState, setCategoriasIngresoState] = useState<string[]>([]);
+  const [subcategoriasExtrasState, setSubcategoriasExtrasState] = useState<string[]>([]);
+  const [fuentesState, setFuentesState] = useState<string[]>([]);
+  const [empresasState, setEmpresasState] = useState<string[]>([]);
+  const [cuentasPorEmpresaState, setCuentasPorEmpresaState] = useState<Record<string, string[]>>({});
+  const [nuevaCategoria, setNuevaCategoria] = useState("");
+  const [nuevaCategoriaIngreso, setNuevaCategoriaIngreso] = useState("");
+  const [nuevaSubcategoria, setNuevaSubcategoria] = useState("");
+  const [nuevaFuente, setNuevaFuente] = useState("");
+  const [nuevaEmpresa, setNuevaEmpresa] = useState("");
+  const [empresaAjustes, setEmpresaAjustes] = useState("");
+  const [nuevaCuenta, setNuevaCuenta] = useState("");
   const inputArchivo = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -525,6 +543,156 @@ export default function Home() {
     cargarNube();
     return () => { activo = false; };
   }, [session, cargado, nubeLista]);
+
+  useEffect(() => {
+    if (!session) {
+      setConfiguracionLista(false);
+      return;
+    }
+    let activo = true;
+    async function cargarConfiguracion() {
+      const [categoriasRes, subcategoriasRes, fuentesRes, empresasRes, cuentasRes] = await Promise.all([
+        supabase.from("categorias").select("nombre,tipo").order("orden"),
+        supabase.from("subcategorias_extras").select("nombre").order("orden"),
+        supabase.from("fuentes").select("nombre").order("orden"),
+        supabase.from("empresas").select("nombre").order("orden"),
+        supabase.from("cuentas").select("empresa,nombre").order("orden"),
+      ]);
+      if (!activo) return;
+      const categoriasFilas = categoriasRes.data || [];
+      setCategoriasGastoState(categoriasFilas.filter((item) => item.tipo === "gasto").map((item) => item.nombre));
+      setCategoriasIngresoState(categoriasFilas.filter((item) => item.tipo === "ingreso").map((item) => item.nombre));
+      setSubcategoriasExtrasState((subcategoriasRes.data || []).map((item) => item.nombre));
+      setFuentesState((fuentesRes.data || []).map((item) => item.nombre));
+      setEmpresasState((empresasRes.data || []).map((item) => item.nombre));
+      const cuentasAgrupadas: Record<string, string[]> = {};
+      (cuentasRes.data || []).forEach((item) => {
+        if (!cuentasAgrupadas[item.empresa]) cuentasAgrupadas[item.empresa] = [];
+        cuentasAgrupadas[item.empresa].push(item.nombre);
+      });
+      setCuentasPorEmpresaState(cuentasAgrupadas);
+      setConfiguracionLista(true);
+    }
+    cargarConfiguracion();
+    return () => { activo = false; };
+  }, [session]);
+
+  async function agregarElemento(
+    tabla: "categorias" | "subcategorias_extras" | "fuentes" | "empresas" | "cuentas",
+    valores: Record<string, unknown>,
+    actualizarLocal: () => void,
+  ) {
+    if (!session) return;
+    const { error } = await supabase.from(tabla).insert({ ...valores, user_id: session.user.id });
+    if (!error) actualizarLocal();
+  }
+
+  async function eliminarElemento(
+    tabla: "categorias" | "subcategorias_extras" | "fuentes" | "empresas" | "cuentas",
+    condicion: Record<string, unknown>,
+    actualizarLocal: () => void,
+  ) {
+    if (!session) return;
+    let consulta = supabase.from(tabla).delete().eq("user_id", session.user.id);
+    Object.entries(condicion).forEach(([columna, valor]) => {
+      consulta = consulta.eq(columna, valor as string);
+    });
+    const { error } = await consulta;
+    if (!error) actualizarLocal();
+  }
+
+  useEffect(() => {
+    if (empresasState.length && !empresasState.includes(empresaAjustes)) {
+      setEmpresaAjustes(empresasState[0]);
+    }
+  }, [empresasState, empresaAjustes]);
+
+  function agregarCategoriaGasto() {
+    const nombre = nuevaCategoria.trim();
+    if (!nombre || categoriasGastoState.includes(nombre)) return;
+    agregarElemento("categorias", { nombre, tipo: "gasto", orden: categoriasGastoState.length }, () => {
+      setCategoriasGastoState((anteriores) => [...anteriores, nombre]);
+      setNuevaCategoria("");
+    });
+  }
+  function eliminarCategoriaGasto(nombre: string) {
+    eliminarElemento("categorias", { nombre, tipo: "gasto" }, () => {
+      setCategoriasGastoState((anteriores) => anteriores.filter((item) => item !== nombre));
+    });
+  }
+  function agregarCategoriaIngresoNueva() {
+    const nombre = nuevaCategoriaIngreso.trim();
+    if (!nombre || categoriasIngresoState.includes(nombre)) return;
+    agregarElemento("categorias", { nombre, tipo: "ingreso", orden: categoriasIngresoState.length }, () => {
+      setCategoriasIngresoState((anteriores) => [...anteriores, nombre]);
+      setNuevaCategoriaIngreso("");
+    });
+  }
+  function eliminarCategoriaIngresoNueva(nombre: string) {
+    eliminarElemento("categorias", { nombre, tipo: "ingreso" }, () => {
+      setCategoriasIngresoState((anteriores) => anteriores.filter((item) => item !== nombre));
+    });
+  }
+  function agregarSubcategoriaNueva() {
+    const nombre = nuevaSubcategoria.trim();
+    if (!nombre || subcategoriasExtrasState.includes(nombre)) return;
+    agregarElemento("subcategorias_extras", { nombre, orden: subcategoriasExtrasState.length }, () => {
+      setSubcategoriasExtrasState((anteriores) => [...anteriores, nombre]);
+      setNuevaSubcategoria("");
+    });
+  }
+  function eliminarSubcategoriaNueva(nombre: string) {
+    eliminarElemento("subcategorias_extras", { nombre }, () => {
+      setSubcategoriasExtrasState((anteriores) => anteriores.filter((item) => item !== nombre));
+    });
+  }
+  function agregarFuenteNueva() {
+    const nombre = nuevaFuente.trim();
+    if (!nombre || fuentesState.includes(nombre)) return;
+    agregarElemento("fuentes", { nombre, orden: fuentesState.length }, () => {
+      setFuentesState((anteriores) => [...anteriores, nombre]);
+      setNuevaFuente("");
+    });
+  }
+  function eliminarFuenteNueva(nombre: string) {
+    eliminarElemento("fuentes", { nombre }, () => {
+      setFuentesState((anteriores) => anteriores.filter((item) => item !== nombre));
+    });
+  }
+  function agregarEmpresaNueva() {
+    const nombre = nuevaEmpresa.trim();
+    if (!nombre || empresasState.includes(nombre)) return;
+    agregarElemento("empresas", { nombre, orden: empresasState.length }, () => {
+      setEmpresasState((anteriores) => [...anteriores, nombre]);
+      setNuevaEmpresa("");
+      setEmpresaAjustes(nombre);
+    });
+  }
+  function eliminarEmpresaNueva(nombre: string) {
+    eliminarElemento("empresas", { nombre }, () => {
+      setEmpresasState((anteriores) => anteriores.filter((item) => item !== nombre));
+      setCuentasPorEmpresaState((anteriores) => {
+        const copia = { ...anteriores };
+        delete copia[nombre];
+        return copia;
+      });
+    });
+  }
+  function agregarCuentaNueva() {
+    const nombre = nuevaCuenta.trim();
+    if (!nombre || !empresaAjustes) return;
+    const actuales = cuentasPorEmpresaState[empresaAjustes] || [];
+    if (actuales.includes(nombre)) return;
+    agregarElemento("cuentas", { nombre, empresa: empresaAjustes, orden: actuales.length }, () => {
+      setCuentasPorEmpresaState((anteriores) => ({ ...anteriores, [empresaAjustes]: [...(anteriores[empresaAjustes] || []), nombre] }));
+      setNuevaCuenta("");
+    });
+  }
+  function eliminarCuentaNueva(nombre: string) {
+    eliminarElemento("cuentas", { nombre, empresa: empresaAjustes }, () => {
+      setCuentasPorEmpresaState((anteriores) => ({ ...anteriores, [empresaAjustes]: (anteriores[empresaAjustes] || []).filter((item) => item !== nombre) }));
+    });
+  }
 
   useEffect(() => {
     if (!session || !nubeLista) return;
@@ -635,6 +803,13 @@ export default function Home() {
     return { mes, diasLaborables, presupuesto, gastoComputable, pagosEncargo, disponible: presupuesto - gastoComputable, porcentaje: presupuesto ? (gastoComputable / presupuesto) * 100 : 0, diasSobreMeta, movimientosPasajes };
   }, [movimientos, filtroMes, mesesDisponibles]);
 
+  const categorias = configuracionLista ? categoriasGastoState : categoriasDefault;
+  const categoriasIngreso = configuracionLista ? categoriasIngresoState : categoriasIngresoDefault;
+  const subcategoriasExtras = configuracionLista ? subcategoriasExtrasState : subcategoriasExtrasDefault;
+  const fuentes = configuracionLista ? fuentesState : fuentesDefault;
+  const empresas = configuracionLista ? empresasState : empresasDefault;
+  const cuentasPorEmpresa = configuracionLista ? cuentasPorEmpresaState : cuentasPorEmpresaDefault;
+
   const resumen = useMemo(() => {
     const movimientosMes = filtroMes === "Todos"
       ? movimientos
@@ -733,7 +908,7 @@ export default function Home() {
     const interesesSip = movimientosMes.filter((item) => item.tipo === "ingreso" && item.empresa === "Personal" && item.categoria === "Rendimientos de inversiones" && sinAcentos(item.cuentaDestino || cuentaMovimiento(item)) === "sip").reduce((total, item) => total + item.monto, 0);
     const aportesSip = movimientosMes.filter((item) => (item.tipo === "transferencia" && item.empresaDestino === "Personal" && sinAcentos(item.cuentaDestino || "") === "sip") || (item.tipo === "ingreso" && item.categoria === "Aporte para ahorro" && sinAcentos(item.cuentaDestino || cuentaMovimiento(item)) === "sip")).reduce((total, item) => total + item.monto, 0);
     return { ingresos, gastos, saldo: ingresos - gastos, balance, porCategoria, porFuente, porExtras, porEmpresa, personal, ss, clever, sip, prestadoJair, disponiblePersonal, interesesSip, aportesSip };
-  }, [movimientos, filtroMes, filtroEmpresa]);
+  }, [movimientos, filtroMes, filtroEmpresa, categorias, empresas, fuentes, subcategoriasExtras]);
 
   const mesPresupuesto = filtroMes === "Todos" ? hoy().slice(0, 7) : filtroMes;
 
@@ -753,7 +928,7 @@ export default function Home() {
         porcentaje: limite ? (gastado / limite) * 100 : 0,
       };
     });
-  }, [movimientos, presupuestos, mesPresupuesto]);
+  }, [movimientos, presupuestos, mesPresupuesto, categorias]);
 
   const reporteMensual = useMemo(() => {
     const porMes = new Map<string, { ingresos: number; gastos: number }>();
@@ -1244,6 +1419,9 @@ export default function Home() {
           <button className={vista === "reportes" ? "active" : ""} onClick={() => setVista("reportes")}>
             ▥ <span>Reportes</span>
           </button>
+          <button className={vista === "ajustes" ? "active" : ""} onClick={() => setVista("ajustes")}>
+            ⚙ <span>Ajustes</span>
+          </button>
         </nav>
         <div className="tip">
           <b>✦ Consejo</b>
@@ -1258,13 +1436,14 @@ export default function Home() {
         <header>
           <div>
             <p className="eyebrow">DESDE EL 15 DE JUNIO</p>
-            <h1>{vista === "inicio" ? "Resumen de patrimonio" : vista === "metas" ? "Metas financieras" : vista === "presupuestos" ? "Presupuestos por categoría" : vista === "reportes" ? "Reportes" : "Movimientos por unidad"}</h1>
+            <h1>{vista === "inicio" ? "Resumen de patrimonio" : vista === "metas" ? "Metas financieras" : vista === "presupuestos" ? "Presupuestos por categoría" : vista === "reportes" ? "Reportes" : vista === "ajustes" ? "Ajustes" : "Movimientos por unidad"}</h1>
             <p className="subtitle">
               {vista === "inicio"
                 ? "Personal, ahorro SIP y negocios claramente separados."
                 : vista === "metas" ? "Control mensual para tomar decisiones antes de exceder el presupuesto."
                 : vista === "presupuestos" ? "Define un límite mensual por categoría y sigue tu avance."
                 : vista === "reportes" ? "La evolución de tus ingresos y gastos a lo largo del tiempo."
+                : vista === "ajustes" ? "Personaliza tus categorías, medios de pago y unidades de negocio."
                 : "Consulta el detalle cuando lo necesites, sin recargar el panel principal."}
             </p>
           </div>
@@ -1276,11 +1455,11 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="scope-bar card">
+        {vista !== "ajustes" && <div className="scope-bar card">
           {vista !== "metas" && vista !== "presupuestos" && vista !== "reportes" && <div><span>Unidad</span><select value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)}><option>Todas</option>{empresas.map((item) => <option key={item}>{item}</option>)}</select></div>}
           <div><span>Periodo</span><select value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)}><option value="Todos">Todos los meses</option>{mesesDisponibles.map((mes) => <option key={mes} value={mes}>{new Date(`${mes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</option>)}</select></div>
           <button onClick={() => setModal(true)}>＋ Nuevo movimiento</button>
-        </div>
+        </div>}
 
         {vista === "inicio" && <section className="financial-summary">
           <article className="card summary-unit personal-unit" onClick={() => setFiltroEmpresa("Personal")}>
@@ -1344,7 +1523,7 @@ export default function Home() {
                     background: `conic-gradient(${resumen.porCategoria
                       .map(
                         (item, indice) =>
-                          `${colores[item.nombre]} ${
+                          `${colorCategoria(item.nombre, indice)} ${
                             (resumen.porCategoria
                               .slice(0, indice)
                               .reduce(
@@ -1375,9 +1554,9 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="legend">
-                  {resumen.porCategoria.map((item) => (
+                  {resumen.porCategoria.map((item, indice) => (
                     <div key={item.nombre}>
-                      <i style={{ background: colores[item.nombre] }} />
+                      <i style={{ background: colorCategoria(item.nombre, indice) }} />
                       <span>{item.nombre}</span>
                       <b>{Math.round((item.total / resumen.gastos) * 100)}%</b>
                       <small>{soles(item.total)}</small>
@@ -1508,6 +1687,104 @@ export default function Home() {
                   ))}
                 </div>
               </>
+            )}
+          </article>}
+
+          {vista === "ajustes" && <article className="card settings-panel">
+            {!session ? (
+              <div className="settings-locked">
+                <p>Inicia sesión o crea una cuenta para personalizar tus propias categorías, medios de pago y unidades de negocio. Mientras tanto, la app usa una lista básica compartida.</p>
+                <button className="save" style={{ width: "auto", marginTop: 4 }} onClick={() => setModalCuenta(true)}>Iniciar sesión o crear cuenta</button>
+              </div>
+            ) : (
+              <div className="settings-grid">
+                <div className="settings-group">
+                  <h3>Categorías de gasto</h3>
+                  <div className="chip-list">
+                    {categoriasGastoState.map((item) => (
+                      <span className="chip" key={item}>{item}<button onClick={() => eliminarCategoriaGasto(item)} aria-label={`Quitar ${item}`}>×</button></span>
+                    ))}
+                    {!categoriasGastoState.length && <p className="settings-empty">Aún no tienes categorías de gasto.</p>}
+                  </div>
+                  <div className="settings-add">
+                    <input placeholder="Nueva categoría" value={nuevaCategoria} onChange={(e) => setNuevaCategoria(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarCategoriaGasto()} />
+                    <button onClick={agregarCategoriaGasto}>Agregar</button>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <h3>Categorías de ingreso</h3>
+                  <div className="chip-list">
+                    {categoriasIngresoState.map((item) => (
+                      <span className="chip" key={item}>{item}<button onClick={() => eliminarCategoriaIngresoNueva(item)} aria-label={`Quitar ${item}`}>×</button></span>
+                    ))}
+                    {!categoriasIngresoState.length && <p className="settings-empty">Aún no tienes categorías de ingreso.</p>}
+                  </div>
+                  <div className="settings-add">
+                    <input placeholder="Nueva categoría" value={nuevaCategoriaIngreso} onChange={(e) => setNuevaCategoriaIngreso(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarCategoriaIngresoNueva()} />
+                    <button onClick={agregarCategoriaIngresoNueva}>Agregar</button>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <h3>Subcategorías de &quot;Extras&quot;</h3>
+                  <div className="chip-list">
+                    {subcategoriasExtrasState.map((item) => (
+                      <span className="chip" key={item}>{item}<button onClick={() => eliminarSubcategoriaNueva(item)} aria-label={`Quitar ${item}`}>×</button></span>
+                    ))}
+                    {!subcategoriasExtrasState.length && <p className="settings-empty">Aún no tienes subcategorías.</p>}
+                  </div>
+                  <div className="settings-add">
+                    <input placeholder="Nueva subcategoría" value={nuevaSubcategoria} onChange={(e) => setNuevaSubcategoria(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarSubcategoriaNueva()} />
+                    <button onClick={agregarSubcategoriaNueva}>Agregar</button>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <h3>Medios de pago</h3>
+                  <div className="chip-list">
+                    {fuentesState.map((item) => (
+                      <span className="chip" key={item}>{item}<button onClick={() => eliminarFuenteNueva(item)} aria-label={`Quitar ${item}`}>×</button></span>
+                    ))}
+                    {!fuentesState.length && <p className="settings-empty">Aún no tienes medios de pago.</p>}
+                  </div>
+                  <div className="settings-add">
+                    <input placeholder="Nuevo medio de pago" value={nuevaFuente} onChange={(e) => setNuevaFuente(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarFuenteNueva()} />
+                    <button onClick={agregarFuenteNueva}>Agregar</button>
+                  </div>
+                </div>
+
+                <div className="settings-group settings-group-wide">
+                  <h3>Unidades de negocio</h3>
+                  <p className="settings-hint">Estas son solo tuyas. Cada persona que use la app crea las suyas propias.</p>
+                  <div className="chip-list">
+                    {empresasState.map((item) => (
+                      <span className={`chip ${empresaAjustes === item ? "selected" : ""}`} key={item} onClick={() => setEmpresaAjustes(item)}>{item}<button onClick={(e) => { e.stopPropagation(); eliminarEmpresaNueva(item); }} aria-label={`Quitar ${item}`}>×</button></span>
+                    ))}
+                    {!empresasState.length && <p className="settings-empty">Aún no tienes unidades de negocio.</p>}
+                  </div>
+                  <div className="settings-add">
+                    <input placeholder="Nueva unidad (ej. Personal)" value={nuevaEmpresa} onChange={(e) => setNuevaEmpresa(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarEmpresaNueva()} />
+                    <button onClick={agregarEmpresaNueva}>Agregar</button>
+                  </div>
+
+                  {empresasState.length > 0 && (
+                    <div className="settings-subsection">
+                      <h4>Cuentas de {empresaAjustes}</h4>
+                      <div className="chip-list">
+                        {(cuentasPorEmpresaState[empresaAjustes] || []).map((item) => (
+                          <span className="chip" key={item}>{item}<button onClick={() => eliminarCuentaNueva(item)} aria-label={`Quitar ${item}`}>×</button></span>
+                        ))}
+                        {!(cuentasPorEmpresaState[empresaAjustes] || []).length && <p className="settings-empty">Sin cuentas todavía.</p>}
+                      </div>
+                      <div className="settings-add">
+                        <input placeholder="Nueva cuenta" value={nuevaCuenta} onChange={(e) => setNuevaCuenta(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarCuentaNueva()} />
+                        <button onClick={agregarCuentaNueva}>Agregar</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </article>}
 
@@ -1671,7 +1948,7 @@ export default function Home() {
               </div>
               {tipo !== "transferencia" && <label>
                 Empresa o unidad
-                <select value={empresa} onChange={(e) => setEmpresa(e.target.value as (typeof empresas)[number])}>
+                <select value={empresa} onChange={(e) => setEmpresa(e.target.value as Empresa)}>
                   {empresas.map((item) => <option key={item}>{item}</option>)}
                 </select>
               </label>}
@@ -1739,26 +2016,26 @@ export default function Home() {
                 <>
                   <label>
                     Unidad de origen
-                    <select value={empresaOrigen} onChange={(e) => { const valor = e.target.value as Empresa; setEmpresaOrigen(valor); setCuentaOrigen(cuentasPorEmpresa[valor][0]); }}>
+                    <select value={empresaOrigen} onChange={(e) => { const valor = e.target.value as Empresa; setEmpresaOrigen(valor); setCuentaOrigen((cuentasPorEmpresa[valor] || [])[0] || ""); }}>
                       {empresas.map((item) => <option key={item}>{item}</option>)}
                     </select>
                   </label>
                   <label>
                     Cuenta de origen
                     <select value={cuentaOrigen} onChange={(e) => setCuentaOrigen(e.target.value)}>
-                      {cuentasPorEmpresa[empresaOrigen].map((item) => <option key={item}>{item}</option>)}
+                      {(cuentasPorEmpresa[empresaOrigen] || []).map((item) => <option key={item}>{item}</option>)}
                     </select>
                   </label>
                   <label>
                     Unidad de destino
-                    <select value={empresaDestino} onChange={(e) => { const valor = e.target.value as Empresa; setEmpresaDestino(valor); setCuentaDestino(cuentasPorEmpresa[valor][0]); }}>
+                    <select value={empresaDestino} onChange={(e) => { const valor = e.target.value as Empresa; setEmpresaDestino(valor); setCuentaDestino((cuentasPorEmpresa[valor] || [])[0] || ""); }}>
                       {empresas.map((item) => <option key={item}>{item}</option>)}
                     </select>
                   </label>
                   <label>
                     Cuenta de destino
                     <select value={cuentaDestino} onChange={(e) => setCuentaDestino(e.target.value)}>
-                      {cuentasPorEmpresa[empresaDestino].map((item) => <option key={item}>{item}</option>)}
+                      {(cuentasPorEmpresa[empresaDestino] || []).map((item) => <option key={item}>{item}</option>)}
                     </select>
                   </label>
                   <label>
@@ -2118,7 +2395,7 @@ export default function Home() {
                   value={actual.empresa}
                   onChange={(e) =>
                     actualizarActual({
-                      empresa: e.target.value as (typeof empresas)[number],
+                      empresa: e.target.value as Empresa,
                     })
                   }
                 >
