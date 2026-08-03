@@ -443,6 +443,7 @@ export default function Home() {
   const [procesandoCuenta, setProcesandoCuenta] = useState(false);
   const [nubeLista, setNubeLista] = useState(false);
   const [estadoNube, setEstadoNube] = useState("Guardado en este dispositivo");
+  const [sincronizandoManual, setSincronizandoManual] = useState(false);
   const [configuracionLista, setConfiguracionLista] = useState(false);
   const [categoriasGastoState, setCategoriasGastoState] = useState<string[]>([]);
   const [categoriasIngresoState, setCategoriasIngresoState] = useState<string[]>([]);
@@ -738,14 +739,72 @@ export default function Home() {
         setEstadoNube("Error al guardar; se conserva copia local");
         return;
       }
-      const ids = movimientos.map((item) => item.id);
-      const borrado = ids.length
-        ? await supabase.from("movimientos").delete().eq("user_id", session.user.id).not("client_id", "in", `(${ids.join(",")})`)
-        : await supabase.from("movimientos").delete().eq("user_id", session.user.id);
-      setEstadoNube(borrado.error ? "Error al sincronizar; se conserva copia local" : "Guardado en la nube");
+      setEstadoNube("Guardado en la nube");
     }, 500);
     return () => window.clearTimeout(temporizador);
   }, [movimientos, session, nubeLista]);
+
+  async function sincronizarAhora() {
+    if (!session || sincronizandoManual) return;
+    setSincronizandoManual(true);
+    setEstadoNube("Sincronizando con la nube…");
+    try {
+      const copiaLocal = localStorage.getItem("mis-finanzas-movimientos");
+      const locales = copiaLocal ? JSON.parse(copiaLocal) as Movimiento[] : movimientos;
+      const filas = locales.map((item) => ({
+        user_id: session.user.id,
+        client_id: item.id,
+        tipo: item.tipo,
+        monto: item.monto,
+        concepto: item.concepto,
+        categoria: item.categoria,
+        fuente: item.fuente || "Otro",
+        detalle_fuente: item.detalleFuente || null,
+        fecha: item.fecha,
+        empresa: item.empresa || "Personal",
+        subcategoria: item.subcategoria || null,
+        empresa_origen: item.empresaOrigen || (item.tipo !== "ingreso" ? item.empresa : null),
+        empresa_destino: item.empresaDestino || (item.tipo !== "gasto" ? item.empresa : null),
+        cuenta_origen: item.cuentaOrigen || (item.tipo !== "ingreso" ? cuentaMovimiento(item) : null),
+        cuenta_destino: item.cuentaDestino || (item.tipo === "transferencia" ? item.detalleFuente || null : item.tipo === "ingreso" ? cuentaMovimiento(item) : null),
+        clase_transferencia: item.claseTransferencia || null,
+        excluir_presupuesto: item.excluirPresupuesto || false,
+        updated_at: new Date().toISOString(),
+      }));
+      const guardado = filas.length
+        ? await supabase.from("movimientos").upsert(filas, { onConflict: "user_id,client_id" })
+        : { error: null };
+      if (guardado.error) throw guardado.error;
+
+      const { data, error } = await supabase
+        .from("movimientos")
+        .select("client_id,tipo,monto,concepto,categoria,fuente,detalle_fuente,fecha,empresa,subcategoria,empresa_origen,empresa_destino,cuenta_origen,cuenta_destino,clase_transferencia,excluir_presupuesto")
+        .order("fecha", { ascending: false });
+      if (error) throw error;
+      const remotos: Movimiento[] = (data || []).map((item) => normalizarDevolucionJair({
+        id: Number(item.client_id), tipo: item.tipo as Tipo, monto: Number(item.monto),
+        concepto: item.concepto, categoria: item.categoria, fuente: item.fuente,
+        detalleFuente: item.detalle_fuente || "", fecha: item.fecha,
+        empresa: item.empresa || "Personal", subcategoria: item.subcategoria || "",
+        empresaOrigen: item.empresa_origen || undefined, empresaDestino: item.empresa_destino || undefined,
+        cuentaOrigen: item.cuenta_origen || undefined, cuentaDestino: item.cuenta_destino || undefined,
+        claseTransferencia: item.clase_transferencia || undefined,
+        excluirPresupuesto: item.excluir_presupuesto || false,
+      }));
+      const combinados = new Map<number, Movimiento>();
+      locales.forEach((item) => combinados.set(item.id, item));
+      remotos.forEach((item) => combinados.set(item.id, item));
+      const resultado = Array.from(combinados.values());
+      setMovimientos(resultado);
+      localStorage.setItem("mis-finanzas-movimientos", JSON.stringify(resultado));
+      setNubeLista(true);
+      setEstadoNube("Guardado en la nube");
+    } catch {
+      setEstadoNube("Error al sincronizar; se conserva copia local");
+    } finally {
+      setSincronizandoManual(false);
+    }
+  }
 
   useEffect(() => {
     if (session && cargado) {
@@ -1063,12 +1122,20 @@ export default function Home() {
     setModal(false);
   }
 
-  function borrar(id: number) {
-    if (confirm("¿Eliminar este movimiento?")) {
-      setMovimientos((anteriores) =>
-        anteriores.filter((movimiento) => movimiento.id !== id),
-      );
+  async function borrar(id: number) {
+    if (!session || !confirm("¿Eliminar este movimiento?")) return;
+    setEstadoNube("Eliminando de la nube…");
+    const { error } = await supabase
+      .from("movimientos")
+      .delete()
+      .eq("user_id", session.user.id)
+      .eq("client_id", id);
+    if (error) {
+      setEstadoNube("No se pudo eliminar; el movimiento se conserva");
+      return;
     }
+    setMovimientos((anteriores) => anteriores.filter((movimiento) => movimiento.id !== id));
+    setEstadoNube("Guardado en la nube");
   }
 
   function verDetalle(tipoDetalle: "Todos" | "Ingreso" | "Gasto" | "Transferencia", empresaDetalle?: Empresa | "Todas") {
@@ -1501,6 +1568,7 @@ export default function Home() {
           </div>
           <div className="account-area">
             <span className={session ? "cloud-state online" : "cloud-state"}>{estadoNube}</span>
+            <button className="sync-now" disabled={sincronizandoManual} onClick={sincronizarAhora}>{sincronizandoManual ? "Sincronizando…" : "Sincronizar ahora"}</button>
             <button className="avatar" aria-label="Cuenta y sincronización" onClick={() => setModalCuenta(true)}>
               {session?.user.email?.slice(0, 2).toUpperCase() || "RS"}
             </button>
