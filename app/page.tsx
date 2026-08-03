@@ -62,7 +62,14 @@ const categoriasDefault = [
   "Extras",
 ];
 const empresasDefault = ["Personal", "SS", "Clever"];
-const subcategoriasExtrasDefault = ["Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
+const subcategoriasExtrasDefault = ["Apoyo a padres", "Hogar", "Educación", "Regalos", "Ocio", "Trámites", "Imprevistos", "Otros"];
+const presupuestoPersonalDefault: Record<string, number> = {
+  Pasajes: 400,
+  Comida: 300,
+  "Pago de deudas": 3300,
+};
+const limiteOtrosGastos = 300;
+const limiteGastoMensual = 4300;
 const categoriasIngresoDefault = ["Sueldo", "Ventas o servicios", "Rendimientos de inversiones", "Aporte para gastos compartidos", "Aporte para ahorro", "Devolución de préstamo", "Otros ingresos", "Saldo inicial"];
 const fuentesDefault = [
   "Yape",
@@ -829,10 +836,12 @@ export default function Home() {
       const data = localStorage.getItem("mis-finanzas-presupuestos");
       if (data) {
         try {
-          setPresupuestos(JSON.parse(data));
+          setPresupuestos({ ...presupuestoPersonalDefault, ...JSON.parse(data) });
         } catch {
-          setPresupuestos({});
+          setPresupuestos(presupuestoPersonalDefault);
         }
+      } else {
+        setPresupuestos(presupuestoPersonalDefault);
       }
       setPresupuestosCargados(true);
     });
@@ -1004,9 +1013,9 @@ export default function Home() {
 
   const avancePresupuestos = useMemo(() => {
     const movimientosMes = movimientos.filter(
-      (item) => item.tipo === "gasto" && !esPrestamoJair(item) && item.fecha.startsWith(mesPresupuesto),
+      (item) => item.tipo === "gasto" && item.empresa === "Personal" && !item.excluirPresupuesto && !esPrestamoJair(item) && item.fecha.startsWith(mesPresupuesto),
     );
-    return categorias.map((nombre) => {
+    const porCategoria = categorias.map((nombre) => {
       const gastado = movimientosMes
         .filter((item) => item.categoria === nombre)
         .reduce((total, item) => total + item.monto, 0);
@@ -1018,6 +1027,16 @@ export default function Home() {
         porcentaje: limite ? (gastado / limite) * 100 : 0,
       };
     });
+    const categoriasPrincipales = new Set(["Pasajes", "Comida", "Pago de deudas"]);
+    const otrosGastado = movimientosMes
+      .filter((item) => !categoriasPrincipales.has(item.categoria))
+      .reduce((total, item) => total + item.monto, 0);
+    const totalGastado = movimientosMes.reduce((total, item) => total + item.monto, 0);
+    return {
+      porCategoria,
+      otros: { gastado: otrosGastado, limite: limiteOtrosGastos, porcentaje: (otrosGastado / limiteOtrosGastos) * 100 },
+      total: { gastado: totalGastado, limite: limiteGastoMensual, porcentaje: (totalGastado / limiteGastoMensual) * 100 },
+    };
   }, [movimientos, presupuestos, mesPresupuesto, categorias]);
 
   const reporteMensual = useMemo(() => {
@@ -1760,9 +1779,19 @@ export default function Home() {
                 <h2>Presupuesto de {new Date(`${mesPresupuesto}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</h2>
               </div>
             </div>
-            <p className="budgets-hint">Define cuánto quieres gastar como máximo en cada categoría este mes. Se guarda en este dispositivo; déjalo en 0 para no controlar esa categoría.</p>
+            <p className="budgets-hint">Regla personal: el gasto total no debe superar S/4,300 al mes. Pasajes, comida y deudas tienen límites propios; todas las demás categorías comparten una sola bolsa de S/300.</p>
+            <div className="budget-rules-summary">
+              {[{ nombre: "Total mensual", ...avancePresupuestos.total }, { nombre: "Otros gastos", ...avancePresupuestos.otros }].map((item) => (
+                <div className="budget-rule-card" key={item.nombre}>
+                  <div><span>{item.nombre}</span><b className={item.gastado > item.limite ? "gasto" : ""}>{soles(item.gastado)} de {soles(item.limite)}</b></div>
+                  <div className="monthly-progress"><i className={item.porcentaje > 100 ? "over" : ""} style={{ width: `${Math.min(100, item.porcentaje)}%` }} /></div>
+                  <small className={item.gastado > item.limite ? "gasto" : ""}>{item.gastado > item.limite ? `Exceso: ${soles(item.gastado - item.limite)}` : `Disponible: ${soles(item.limite - item.gastado)}`}</small>
+                </div>
+              ))}
+            </div>
+            <p className="budget-allocation-note"><b>Distribución:</b> Pasajes S/400 · Comida S/300 · Pago de deudas S/3,300 · Otros S/300. El apoyo mensual de S/200 a tus papás se registra como Extras → Apoyo a padres.</p>
             <div className="budgets-grid">
-              {avancePresupuestos.map((item) => (
+              {avancePresupuestos.porCategoria.map((item) => (
                 <div className="budget-card" key={item.nombre}>
                   <div className="budget-card-head">
                     <span><i style={{ background: colores[item.nombre] || "#94a3b8" }} />{item.nombre}</span>
