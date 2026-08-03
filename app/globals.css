@@ -125,6 +125,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 
 .budgets-panel,.reports-panel{width:100%;padding:26px}
 .budgets-hint{color:var(--muted);font-size:12px;line-height:1.55;margin:6px 0 22px}
+.budget-rules-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}.budget-rule-card{border:1px solid var(--line);border-radius:16px;padding:17px;background:#f7f9fc}.budget-rule-card>div:first-child{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px}.budget-rule-card span{font-weight:800}.budget-rule-card small{display:block;color:var(--muted);font-size:10px}.budget-rule-card small.gasto{color:var(--coral);font-weight:700}.budget-allocation-note{padding:12px 14px;border-radius:12px;background:#f2f6fd;color:#50617d;font-size:10px;line-height:1.55;margin:0 0 18px}
 .budgets-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
 .budget-card{border:1px solid var(--line);border-radius:16px;padding:16px;background:#faf9f7;display:grid;gap:10px}
 .budget-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -154,7 +155,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .trend-table>div{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:10px;padding:11px 4px;border-bottom:1px solid #eee9e4;font-size:12px;align-items:center}
 .trend-table>div>span{color:var(--muted);text-transform:capitalize}
 .trend-table>div>b{text-align:right}
-@media(max-width:700px){.budgets-grid{grid-template-columns:1fr}.trend-table>div{grid-template-columns:1fr 1fr;row-gap:4px}.trend-chart{height:170px}}
+@media(max-width:700px){.budget-rules-summary,.budgets-grid{grid-template-columns:1fr}.budget-rule-card>div:first-child{align-items:flex-start;flex-direction:column;gap:5px}.trend-table>div{grid-template-columns:1fr 1fr;row-gap:4px}.trend-chart{height:170px}}
 
 .settings-panel{width:100%;padding:26px}
 .settings-locked{max-width:520px}
