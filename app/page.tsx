@@ -8,6 +8,8 @@ import {
   useRef,
   useState,
 } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 
 type Tipo = "ingreso" | "gasto";
 type Movimiento = {
@@ -342,6 +344,14 @@ export default function Home() {
   const [borradores, setBorradores] = useState<MovimientoImportado[]>([]);
   const [indiceRevision, setIndiceRevision] = useState(0);
   const [duplicadosOmitidos, setDuplicadosOmitidos] = useState(0);
+  const [session, setSession] = useState<Session | null>(null);
+  const [modalCuenta, setModalCuenta] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [mensajeCuenta, setMensajeCuenta] = useState("");
+  const [procesandoCuenta, setProcesandoCuenta] = useState(false);
+  const [nubeLista, setNubeLista] = useState(false);
+  const [estadoNube, setEstadoNube] = useState("Guardado en este dispositivo");
   const inputArchivo = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -368,6 +378,87 @@ export default function Home() {
       setCargado(true);
     });
   }, []);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data } = supabase.auth.onAuthStateChange((_event, nuevaSession) => {
+      setSession(nuevaSession);
+      if (!nuevaSession) {
+        setNubeLista(false);
+        setEstadoNube("Guardado en este dispositivo");
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session || !cargado || nubeLista) return;
+    let activo = true;
+    async function cargarNube() {
+      setEstadoNube("Sincronizando con la nube…");
+      const { data, error } = await supabase
+        .from("movimientos")
+        .select("client_id,tipo,monto,concepto,categoria,fuente,detalle_fuente,fecha")
+        .order("fecha", { ascending: false });
+      if (!activo) return;
+      if (error) {
+        setEstadoNube("No se pudo conectar con la nube");
+        return;
+      }
+      const remotos: Movimiento[] = (data || []).map((item) => ({
+        id: Number(item.client_id),
+        tipo: item.tipo as Tipo,
+        monto: Number(item.monto),
+        concepto: item.concepto,
+        categoria: item.categoria,
+        fuente: item.fuente,
+        detalleFuente: item.detalle_fuente || "",
+        fecha: item.fecha,
+      }));
+      setMovimientos((locales) => {
+        const combinados = new Map<number, Movimiento>();
+        remotos.forEach((item) => combinados.set(item.id, item));
+        locales.forEach((item) => combinados.set(item.id, item));
+        return Array.from(combinados.values());
+      });
+      setNubeLista(true);
+      setEstadoNube("Guardado en la nube");
+    }
+    cargarNube();
+    return () => { activo = false; };
+  }, [session, cargado, nubeLista]);
+
+  useEffect(() => {
+    if (!session || !nubeLista) return;
+    const temporizador = window.setTimeout(async () => {
+      setEstadoNube("Guardando en la nube…");
+      const filas = movimientos.map((item) => ({
+        user_id: session.user.id,
+        client_id: item.id,
+        tipo: item.tipo,
+        monto: item.monto,
+        concepto: item.concepto,
+        categoria: item.categoria,
+        fuente: item.fuente || "Otro",
+        detalle_fuente: item.detalleFuente || null,
+        fecha: item.fecha,
+        updated_at: new Date().toISOString(),
+      }));
+      const guardado = filas.length
+        ? await supabase.from("movimientos").upsert(filas, { onConflict: "user_id,client_id" })
+        : { error: null };
+      if (guardado.error) {
+        setEstadoNube("Error al guardar; se conserva copia local");
+        return;
+      }
+      const ids = movimientos.map((item) => item.id);
+      const borrado = ids.length
+        ? await supabase.from("movimientos").delete().eq("user_id", session.user.id).not("client_id", "in", `(${ids.join(",")})`)
+        : await supabase.from("movimientos").delete().eq("user_id", session.user.id);
+      setEstadoNube(borrado.error ? "Error al sincronizar; se conserva copia local" : "Guardado en la nube");
+    }, 500);
+    return () => window.clearTimeout(temporizador);
+  }, [movimientos, session, nubeLista]);
 
   useEffect(() => {
     if (cargado) {
@@ -464,6 +555,33 @@ export default function Home() {
         anteriores.filter((movimiento) => movimiento.id !== id),
       );
     }
+  }
+
+  async function accederCuenta(accion: "ingresar" | "crear") {
+    if (!email.trim() || password.length < 6) {
+      setMensajeCuenta("Ingresa un correo válido y una contraseña de al menos 6 caracteres.");
+      return;
+    }
+    setProcesandoCuenta(true);
+    setMensajeCuenta("");
+    const { error } = accion === "crear"
+      ? await supabase.auth.signUp({ email: email.trim(), password })
+      : await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setProcesandoCuenta(false);
+    if (error) {
+      setMensajeCuenta(error.message);
+    } else if (accion === "crear") {
+      setMensajeCuenta("Cuenta creada. Revisa tu correo para confirmar el acceso.");
+    } else {
+      setModalCuenta(false);
+      setPassword("");
+    }
+  }
+
+  async function cerrarSesion() {
+    await supabase.auth.signOut();
+    setModalCuenta(false);
+    setPassword("");
   }
 
   function reiniciarImportacion() {
@@ -796,7 +914,12 @@ export default function Home() {
               pagando.
             </p>
           </div>
-          <button className="avatar">RS</button>
+          <div className="account-area">
+            <span className={session ? "cloud-state online" : "cloud-state"}>{estadoNube}</span>
+            <button className="avatar" aria-label="Cuenta y sincronización" onClick={() => setModalCuenta(true)}>
+              {session?.user.email?.slice(0, 2).toUpperCase() || "RS"}
+            </button>
+          </div>
         </header>
 
         <section className="cards">
@@ -996,6 +1119,35 @@ export default function Home() {
           </article>
         </section>
       </section>
+
+      {modalCuenta && (
+        <div className="modal-backdrop" onMouseDown={() => setModalCuenta(false)}>
+          <div className="modal account-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <button className="close" onClick={() => setModalCuenta(false)}>×</button>
+            <span className="eyebrow">CUENTA Y RESPALDO</span>
+            {session ? (
+              <>
+                <h2>Información sincronizada</h2>
+                <p>Tus movimientos se guardan en la nube y estarán disponibles en tus otros dispositivos.</p>
+                <div className="signed-account"><b>{session.user.email}</b><span>{estadoNube}</span></div>
+                <button className="save logout" onClick={cerrarSesion}>Cerrar sesión</button>
+              </>
+            ) : (
+              <>
+                <h2>Guardar en la nube</h2>
+                <p>Inicia sesión o crea una cuenta. Los movimientos de este dispositivo se migrarán automáticamente.</p>
+                <form onSubmit={(e) => { e.preventDefault(); accederCuenta("ingresar"); }}>
+                  <label>Correo electrónico<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+                  <label>Contraseña<input type="password" minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+                  {mensajeCuenta && <p className="account-message">{mensajeCuenta}</p>}
+                  <button className="save" disabled={procesandoCuenta}>Iniciar sesión</button>
+                  <button type="button" className="create-account" disabled={procesandoCuenta} onClick={() => accederCuenta("crear")}>Crear una cuenta</button>
+                </form>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {modal && (
         <div className="modal-backdrop" onMouseDown={() => setModal(false)}>
