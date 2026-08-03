@@ -100,6 +100,14 @@ const soles = (n: number) =>
     currency: "PEN",
   }).format(n);
 const hoy = () => new Date().toISOString().slice(0, 10);
+function ventanaIngresosMes(mes: string) {
+  const [anio, numeroMes] = mes.split("-").map(Number);
+  const anterior = numeroMes === 1
+    ? `${anio - 1}-12`
+    : `${anio}-${String(numeroMes - 1).padStart(2, "0")}`;
+  const ultimoDia = new Date(anio, numeroMes, 0).getDate();
+  return { desde: `${anterior}-25`, hasta: `${mes}-${String(ultimoDia).padStart(2, "0")}` };
+}
 const sinAcentos = (valor: string) =>
   valor
     .normalize("NFD")
@@ -887,6 +895,12 @@ export default function Home() {
     const movimientosMes = filtroMes === "Todos"
       ? movimientos
       : movimientos.filter((item) => item.fecha.startsWith(filtroMes));
+    const ingresosMes = filtroMes === "Todos"
+      ? movimientos.filter((item) => item.tipo === "ingreso")
+      : movimientos.filter((item) => {
+          const ventana = ventanaIngresosMes(filtroMes);
+          return item.tipo === "ingreso" && item.fecha >= ventana.desde && item.fecha <= ventana.hasta;
+        });
     const movimientosPeriodo = filtroEmpresa === "Todas"
       ? movimientosMes
       : movimientosMes.filter((item) =>
@@ -894,7 +908,10 @@ export default function Home() {
             ? item.empresaOrigen === filtroEmpresa || item.empresaDestino === filtroEmpresa
             : item.empresa === filtroEmpresa,
         );
-    const ingresos = movimientosPeriodo
+    const ingresosPeriodo = filtroEmpresa === "Todas"
+      ? ingresosMes
+      : ingresosMes.filter((item) => item.empresa === filtroEmpresa);
+    const ingresos = ingresosPeriodo
       .filter((movimiento) => movimiento.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(movimiento.categoria))
       .reduce((total, movimiento) => total + movimiento.monto, 0);
     const gastos = movimientosPeriodo
@@ -947,7 +964,7 @@ export default function Home() {
       .sort((a, b) => b.total - a.total);
     const porEmpresa = empresas.map((nombre) => {
       const items = movimientosMes.filter((item) => item.tipo !== "transferencia" && item.empresa === nombre);
-      const ingresosEmpresa = items.filter((item) => item.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)).reduce((total, item) => total + item.monto, 0);
+      const ingresosEmpresa = ingresosMes.filter((item) => item.empresa === nombre && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)).reduce((total, item) => total + item.monto, 0);
       const gastosEmpresa = items.filter((item) => item.tipo === "gasto" && !esPrestamoJair(item)).reduce((total, item) => total + item.monto, 0);
       const movimientosBalance = filtroMes === "Todos" ? movimientos : movimientos.filter((item) => item.fecha <= `${filtroMes}-31`);
       const saldos = new Map<string, number>();
@@ -1005,15 +1022,17 @@ export default function Home() {
 
   const reporteMensual = useMemo(() => {
     const porMes = new Map<string, { ingresos: number; gastos: number }>();
-    movimientos.forEach((item) => {
-      const mes = item.fecha.slice(0, 7);
+    const mesesReporte = Array.from(new Set(movimientos.map((item) => item.fecha.slice(0, 7))));
+    mesesReporte.forEach((mes) => {
       if (!porMes.has(mes)) porMes.set(mes, { ingresos: 0, gastos: 0 });
       const registro = porMes.get(mes)!;
-      if (item.tipo === "ingreso" && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria)) {
-        registro.ingresos += item.monto;
-      } else if (item.tipo === "gasto" && !esPrestamoJair(item)) {
-        registro.gastos += item.monto;
-      }
+      const ventana = ventanaIngresosMes(mes);
+      registro.ingresos = movimientos
+        .filter((item) => item.tipo === "ingreso" && item.fecha >= ventana.desde && item.fecha <= ventana.hasta && !["Saldo inicial", "Devolución de préstamo"].includes(item.categoria))
+        .reduce((total, item) => total + item.monto, 0);
+      registro.gastos = movimientos
+        .filter((item) => item.tipo === "gasto" && item.fecha.startsWith(mes) && !esPrestamoJair(item))
+        .reduce((total, item) => total + item.monto, 0);
     });
     const meses = Array.from(porMes.entries())
       .map(([mes, valores]) => ({ mes, ...valores, ahorro: valores.ingresos - valores.gastos }))
@@ -1580,6 +1599,11 @@ export default function Home() {
           <div><span>Periodo</span><select value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)}><option value="Todos">Todos los meses</option>{mesesDisponibles.map((mes) => <option key={mes} value={mes}>{new Date(`${mes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</option>)}</select></div>
           <button onClick={() => { setMovimientoEditando(null); setModal(true); }}>＋ Nuevo movimiento</button>
         </div>}
+
+        {vista === "inicio" && filtroMes !== "Todos" && (() => {
+          const ventana = ventanaIngresosMes(filtroMes);
+          return <p className="financial-period-note">Mes financiero: ingresos del {new Date(`${ventana.desde}T12:00:00`).toLocaleDateString("es-PE", { day: "2-digit", month: "short" })} al {new Date(`${ventana.hasta}T12:00:00`).toLocaleDateString("es-PE", { day: "2-digit", month: "short" })}; gastos del 01 al fin de {new Date(`${filtroMes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long" })}. Las transferencias propias no afectan el resultado.</p>;
+        })()}
 
         {vista === "inicio" && <section className="financial-summary">
           <article className="card summary-unit personal-unit" onClick={() => setFiltroEmpresa("Personal")}>
