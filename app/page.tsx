@@ -413,6 +413,7 @@ export default function Home() {
   const [excluirPresupuesto, setExcluirPresupuesto] = useState(false);
   const [busqueda, setBusqueda] = useState("");
   const [ocultar, setOcultar] = useState(false);
+  const [extrasAbierto, setExtrasAbierto] = useState<string | null>(null);
   const [cargado, setCargado] = useState(false);
   const [archivosExcel, setArchivosExcel] = useState<ArchivoImportado[]>([]);
   const [indiceArchivo, setIndiceArchivo] = useState(0);
@@ -679,12 +680,21 @@ export default function Home() {
       .filter((item) => item.total > 0)
       .sort((a, b) => b.total - a.total);
     const porExtras = subcategoriasExtras
-      .map((nombre) => ({
-        nombre,
-        total: movimientosPeriodo
-          .filter((item) => item.tipo === "gasto" && !esPrestamoJair(item) && item.categoria === "Extras" && (item.subcategoria || "Otros") === nombre)
-          .reduce((total, item) => total + item.monto, 0),
-      }))
+      .map((nombre) => {
+        const movimientosSub = movimientosPeriodo.filter((item) => item.tipo === "gasto" && !esPrestamoJair(item) && item.categoria === "Extras" && (item.subcategoria || "Otros") === nombre);
+        const porConcepto = new Map<string, number>();
+        movimientosSub.forEach((item) => {
+          const clave = item.concepto.trim() || "Sin descripción";
+          porConcepto.set(clave, (porConcepto.get(clave) || 0) + item.monto);
+        });
+        return {
+          nombre,
+          total: movimientosSub.reduce((total, item) => total + item.monto, 0),
+          conceptos: Array.from(porConcepto.entries())
+            .map(([concepto, total]) => ({ concepto, total }))
+            .sort((a, b) => b.total - a.total),
+        };
+      })
       .filter((item) => item.total > 0)
       .sort((a, b) => b.total - a.total);
     const porEmpresa = empresas.map((nombre) => {
@@ -1384,7 +1394,24 @@ export default function Home() {
               <div><span>Préstamos pendientes de Jair</span><strong>{soles(resumen.prestadoJair)}</strong><small>No se consideran gasto: permanecen como dinero por cobrar.</small></div>
               <div><span>Ahorro acumulado en SIP</span><strong>{soles(resumen.sip)}</strong><small>Incluye depósitos e intereses registrados en la cuenta SIP.</small></div>
             </div>
-            <div className="extras-detail"><span className="eyebrow">GASTOS EXTRAS REALES</span>{resumen.porExtras.length ? resumen.porExtras.map((item) => <div key={item.nombre}><span>{item.nombre}</span><b>{soles(item.total)}</b></div>) : <p>No hay otros gastos clasificados como Extras en este periodo.</p>}</div>
+            <div className="extras-detail">
+              <span className="eyebrow">GASTOS EXTRAS REALES</span>
+              {resumen.porExtras.length ? resumen.porExtras.map((item) => (
+                <div className="extras-group" key={item.nombre}>
+                  <div className="extras-group-head" onClick={() => setExtrasAbierto(extrasAbierto === item.nombre ? null : item.nombre)}>
+                    <span>{item.nombre}</span>
+                    <b>{soles(item.total)}</b>
+                  </div>
+                  {extrasAbierto === item.nombre && (
+                    <div className="extras-conceptos">
+                      {item.conceptos.map((concepto) => (
+                        <div key={concepto.concepto}><span>{concepto.concepto}</span><b>{soles(concepto.total)}</b></div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )) : <p>No hay otros gastos clasificados como Extras en este periodo.</p>}
+            </div>
           </article>
           </>}
 
