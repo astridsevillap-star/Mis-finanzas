@@ -51,6 +51,8 @@ const categorias = [
   "Ropa",
   "Extras",
 ];
+const categoriasIngreso = ["Ingresos", "Jair"];
+const detallesIngreso = ["BCP", "IBK", "SIP", "SS", "Otros"];
 const fuentes = [
   "Yape",
   "Plin",
@@ -330,6 +332,7 @@ export default function Home() {
   const [monto, setMonto] = useState("");
   const [concepto, setConcepto] = useState("");
   const [categoria, setCategoria] = useState("Comida");
+  const [categoriaIngreso, setCategoriaIngreso] = useState("Ingresos");
   const [fuente, setFuente] = useState("Yape");
   const [detalleFuente, setDetalleFuente] = useState("");
   const [fecha, setFecha] = useState(hoy());
@@ -540,7 +543,7 @@ export default function Home() {
         tipo,
         monto: valor,
         concepto: concepto.trim(),
-        categoria: tipo === "ingreso" ? "Ingresos" : categoria,
+        categoria: tipo === "ingreso" ? categoriaIngreso : categoria,
         fuente,
         detalleFuente: detalleFuente.trim(),
         fecha,
@@ -550,6 +553,7 @@ export default function Home() {
     setMonto("");
     setConcepto("");
     setDetalleFuente("");
+    setCategoriaIngreso("Ingresos");
     setFecha(hoy());
     setModal(false);
   }
@@ -1217,10 +1221,24 @@ export default function Home() {
                   Ingreso
                 </button>
               </div>
+              {tipo === "ingreso" && (
+                <label>
+                  Categoría
+                  <select
+                    autoFocus
+                    value={categoriaIngreso}
+                    onChange={(e) => setCategoriaIngreso(e.target.value)}
+                  >
+                    {categoriasIngreso.map((item) => (
+                      <option key={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label>
                 Monto (S/)
                 <input
-                  autoFocus
+                  autoFocus={tipo === "gasto"}
                   inputMode="decimal"
                   type="number"
                   min="0.01"
@@ -1231,15 +1249,17 @@ export default function Home() {
                   required
                 />
               </label>
-              <label>
-                Concepto
-                <input
-                  placeholder="Ej. Almuerzo, sueldo, pago de tarjeta"
-                  value={concepto}
-                  onChange={(e) => setConcepto(e.target.value)}
-                  required
-                />
-              </label>
+              {tipo === "gasto" && (
+                <label>
+                  Concepto
+                  <input
+                    placeholder="Ej. Almuerzo, pago de tarjeta"
+                    value={concepto}
+                    onChange={(e) => setConcepto(e.target.value)}
+                    required
+                  />
+                </label>
+              )}
               {tipo === "gasto" && (
                 <label>
                   Categoría
@@ -1264,20 +1284,46 @@ export default function Home() {
                   ))}
                 </select>
               </label>
-              <label>
-                {fuente === "Tarjeta"
-                  ? "¿Qué tarjeta utilizaste?"
-                  : "Detalle de la fuente (opcional)"}
-                <input
-                  placeholder={
-                    fuente === "Tarjeta"
-                      ? "Ej. BCP Visa, Interbank, Ripley"
-                      : "Ej. Cuenta BCP, billetera personal"
-                  }
-                  value={detalleFuente}
-                  onChange={(e) => setDetalleFuente(e.target.value)}
-                />
-              </label>
+              {tipo === "ingreso" ? (
+                <label>
+                  Detalle de la fuente
+                  <select
+                    value={detalleFuente}
+                    onChange={(e) => setDetalleFuente(e.target.value)}
+                  >
+                    <option value="">Seleccionar</option>
+                    {detallesIngreso.map((item) => (
+                      <option key={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label>
+                  {fuente === "Tarjeta"
+                    ? "¿Qué tarjeta utilizaste?"
+                    : "Detalle de la fuente (opcional)"}
+                  <input
+                    placeholder={
+                      fuente === "Tarjeta"
+                        ? "Ej. BCP Visa, Interbank, Ripley"
+                        : "Ej. Cuenta BCP, billetera personal"
+                    }
+                    value={detalleFuente}
+                    onChange={(e) => setDetalleFuente(e.target.value)}
+                  />
+                </label>
+              )}
+              {tipo === "ingreso" && (
+                <label>
+                  Concepto
+                  <input
+                    placeholder="Ej. Sueldo, devolución, depósito"
+                    value={concepto}
+                    onChange={(e) => setConcepto(e.target.value)}
+                    required
+                  />
+                </label>
+              )}
               <label>
                 Fecha
                 <input
