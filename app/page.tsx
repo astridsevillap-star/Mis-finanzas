@@ -11,7 +11,7 @@ import {
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
-type Tipo = "ingreso" | "gasto";
+type Tipo = "ingreso" | "gasto" | "transferencia";
 type Movimiento = {
   id: number;
   tipo: Tipo;
@@ -60,6 +60,7 @@ const fuentes = [
   "Efectivo",
   "Otro",
 ];
+const cuentasTransferencia = ["BCP", "IBK", "SIP", "SS", "Efectivo", "Otro"];
 const colores: Record<string, string> = {
   Pasajes: "#58c7a2",
   Comida: "#ff6b5f",
@@ -344,9 +345,12 @@ export default function Home() {
   const [categoria, setCategoria] = useState("Comida");
   const [fuente, setFuente] = useState("Yape");
   const [detalleFuente, setDetalleFuente] = useState("");
+  const [cuentaOrigen, setCuentaOrigen] = useState("BCP");
+  const [cuentaDestino, setCuentaDestino] = useState("IBK");
   const [fecha, setFecha] = useState(hoy());
   const [filtro, setFiltro] = useState("Todos");
   const [filtroFuente, setFiltroFuente] = useState("Todas");
+  const [filtroMes, setFiltroMes] = useState("Todos");
   const [busqueda, setBusqueda] = useState("");
   const [ocultar, setOcultar] = useState(false);
   const [cargado, setCargado] = useState(false);
@@ -486,17 +490,25 @@ export default function Home() {
     }
   }, [movimientos, cargado]);
 
+  const mesesDisponibles = useMemo(
+    () => Array.from(new Set(movimientos.map((item) => item.fecha.slice(0, 7)))).sort().reverse(),
+    [movimientos],
+  );
+
   const resumen = useMemo(() => {
-    const ingresos = movimientos
+    const movimientosPeriodo = filtroMes === "Todos"
+      ? movimientos
+      : movimientos.filter((item) => item.fecha.startsWith(filtroMes));
+    const ingresos = movimientosPeriodo
       .filter((movimiento) => movimiento.tipo === "ingreso")
       .reduce((total, movimiento) => total + movimiento.monto, 0);
-    const gastos = movimientos
+    const gastos = movimientosPeriodo
       .filter((movimiento) => movimiento.tipo === "gasto")
       .reduce((total, movimiento) => total + movimiento.monto, 0);
     const porCategoria = categorias
       .map((nombre) => ({
         nombre,
-        total: movimientos
+        total: movimientosPeriodo
           .filter(
             (movimiento) =>
               movimiento.tipo === "gasto" &&
@@ -509,7 +521,7 @@ export default function Home() {
     const porFuente = fuentes
       .map((nombre) => ({
         nombre,
-        total: movimientos
+        total: movimientosPeriodo
           .filter(
             (movimiento) =>
               movimiento.tipo === "gasto" &&
@@ -520,7 +532,7 @@ export default function Home() {
       .filter((item) => item.total > 0)
       .sort((a, b) => b.total - a.total);
     return { ingresos, gastos, saldo: ingresos - gastos, porCategoria, porFuente };
-  }, [movimientos]);
+  }, [movimientos, filtroMes]);
 
   const lista = movimientos
     .filter(
@@ -528,6 +540,7 @@ export default function Home() {
         (filtro === "Todos" || movimiento.tipo === filtro.toLowerCase()) &&
         (filtroFuente === "Todas" ||
           (movimiento.fuente || "Otro") === filtroFuente) &&
+        (filtroMes === "Todos" || movimiento.fecha.startsWith(filtroMes)) &&
         movimiento.concepto.toLowerCase().includes(busqueda.toLowerCase()),
     )
     .sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -546,16 +559,20 @@ export default function Home() {
     e.preventDefault();
     const valor = Number(monto);
     if (!valor) return;
+    if (tipo === "transferencia" && cuentaOrigen === cuentaDestino) {
+      alert("La cuenta de origen y destino deben ser diferentes.");
+      return;
+    }
     const detalleCalculado = detalleAutomatico(fuente);
     setMovimientos((anteriores) => [
       {
         id: Date.now(),
         tipo,
         monto: valor,
-        concepto: concepto.trim() || "Sin concepto",
-        categoria: tipo === "ingreso" ? "Ingresos" : categoria,
-        fuente,
-        detalleFuente: detalleCalculado || detalleFuente.trim(),
+        concepto: concepto.trim() || (tipo === "transferencia" ? "Transferencia propia" : "Sin concepto"),
+        categoria: tipo === "ingreso" ? "Ingresos" : tipo === "transferencia" ? "Transferencias entre cuentas" : categoria,
+        fuente: tipo === "transferencia" ? cuentaOrigen : fuente,
+        detalleFuente: tipo === "transferencia" ? cuentaDestino : detalleCalculado || detalleFuente.trim(),
         fecha,
       },
       ...anteriores,
@@ -563,6 +580,8 @@ export default function Home() {
     setMonto("");
     setConcepto("");
     setDetalleFuente("");
+    setCuentaOrigen("BCP");
+    setCuentaDestino("IBK");
     setFecha(hoy());
     setModal(false);
   }
@@ -1033,7 +1052,11 @@ export default function Home() {
                 <span className="eyebrow">ANÁLISIS</span>
                 <h2>¿En qué estás gastando?</h2>
               </div>
-              <span className="period">Todos</span>
+              <span className="period">
+                {filtroMes === "Todos"
+                  ? "Todos"
+                  : new Date(`${filtroMes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}
+              </span>
             </div>
             {resumen.gastos === 0 ? (
               <p className="empty">Aún no hay gastos registrados.</p>
@@ -1110,6 +1133,15 @@ export default function Home() {
                   <option>Todos</option>
                   <option>Ingreso</option>
                   <option>Gasto</option>
+                  <option>Transferencia</option>
+                </select>
+                <select aria-label="Mes" value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)}>
+                  <option value="Todos">Todos los meses</option>
+                  {mesesDisponibles.map((mes) => (
+                    <option key={mes} value={mes}>
+                      {new Date(`${mes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}
+                    </option>
+                  ))}
                 </select>
                 <select
                   aria-label="Medio de pago"
@@ -1136,7 +1168,7 @@ export default function Home() {
                 lista.map((movimiento) => (
                   <div className="movement" key={movimiento.id}>
                     <span className={`movement-icon ${movimiento.tipo}`}>
-                      {movimiento.tipo === "ingreso" ? "↓" : "↑"}
+                      {movimiento.tipo === "ingreso" ? "↓" : movimiento.tipo === "transferencia" ? "⇄" : "↑"}
                     </span>
                     <div className="movement-name">
                       <b>{movimiento.concepto}</b>
@@ -1155,7 +1187,7 @@ export default function Home() {
                       </small>
                     </div>
                     <strong className={movimiento.tipo}>
-                      {movimiento.tipo === "ingreso" ? "+" : "−"}
+                      {movimiento.tipo === "ingreso" ? "+" : movimiento.tipo === "gasto" ? "−" : ""}
                       {soles(movimiento.monto)}
                     </strong>
                     <button
@@ -1214,7 +1246,7 @@ export default function Home() {
             <h2>Registrar movimiento</h2>
             <p>Puedes cargar movimientos desde el 15 de junio de 2026.</p>
             <form onSubmit={guardar}>
-              <div className="type-toggle">
+              <div className="type-toggle transfer-toggle">
                 <button
                   type="button"
                   className={tipo === "gasto" ? "selected gasto" : ""}
@@ -1228,6 +1260,13 @@ export default function Home() {
                   onClick={() => setTipo("ingreso")}
                 >
                   Ingreso
+                </button>
+                <button
+                  type="button"
+                  className={tipo === "transferencia" ? "selected transferencia" : ""}
+                  onClick={() => setTipo("transferencia")}
+                >
+                  Transferencia
                 </button>
               </div>
               {tipo === "gasto" && (
@@ -1247,7 +1286,7 @@ export default function Home() {
               <label>
                 Monto (S/)
                 <input
-                  autoFocus={tipo === "ingreso"}
+                  autoFocus={tipo !== "gasto"}
                   inputMode="decimal"
                   type="number"
                   min="0.01"
@@ -1268,38 +1307,55 @@ export default function Home() {
                   />
                 </label>
               )}
-              <label>
-                Medio de pago o fuente
-                <select
-                  value={fuente}
-                  onChange={(e) => {
-                    setFuente(e.target.value);
-                    setDetalleFuente("");
-                  }}
-                >
-                  {fuentes.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Detalle de la fuente
-                <input
-                  placeholder={
-                    fuente === "Efectivo" || fuente === "Otro"
-                      ? "Escribe el detalle"
-                      : "Se completa automáticamente"
-                  }
-                  value={detalleAutomatico(fuente) || detalleFuente}
-                  readOnly={Boolean(detalleAutomatico(fuente))}
-                  onChange={(e) => setDetalleFuente(e.target.value)}
-                />
-              </label>
+              {tipo === "transferencia" ? (
+                <>
+                  <label>
+                    Cuenta de origen
+                    <select value={cuentaOrigen} onChange={(e) => setCuentaOrigen(e.target.value)}>
+                      {cuentasTransferencia.map((item) => <option key={item}>{item}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Cuenta de destino
+                    <select value={cuentaDestino} onChange={(e) => setCuentaDestino(e.target.value)}>
+                      {cuentasTransferencia.map((item) => <option key={item}>{item}</option>)}
+                    </select>
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label>
+                    Medio de pago o fuente
+                    <select value={fuente} onChange={(e) => { setFuente(e.target.value); setDetalleFuente(""); }}>
+                      {fuentes.map((item) => <option key={item}>{item}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Detalle de la fuente
+                    <input
+                      placeholder={fuente === "Efectivo" || fuente === "Otro" ? "Escribe el detalle" : "Se completa automáticamente"}
+                      value={detalleAutomatico(fuente) || detalleFuente}
+                      readOnly={Boolean(detalleAutomatico(fuente))}
+                      onChange={(e) => setDetalleFuente(e.target.value)}
+                    />
+                  </label>
+                </>
+              )}
               {tipo === "ingreso" && (
                 <label>
                   Concepto (opcional)
                   <input
                     placeholder="Ej. Sueldo, devolución, depósito"
+                    value={concepto}
+                    onChange={(e) => setConcepto(e.target.value)}
+                  />
+                </label>
+              )}
+              {tipo === "transferencia" && (
+                <label>
+                  Concepto (opcional)
+                  <input
+                    placeholder="Ej. Traspaso a cuenta de ahorro"
                     value={concepto}
                     onChange={(e) => setConcepto(e.target.value)}
                   />
