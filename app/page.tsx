@@ -345,6 +345,7 @@ export default function Home() {
   const [indiceRevision, setIndiceRevision] = useState(0);
   const [duplicadosOmitidos, setDuplicadosOmitidos] = useState(0);
   const [session, setSession] = useState<Session | null>(null);
+  const [authRevisada, setAuthRevisada] = useState(false);
   const [modalCuenta, setModalCuenta] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -380,9 +381,13 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthRevisada(true);
+    });
     const { data } = supabase.auth.onAuthStateChange((_event, nuevaSession) => {
       setSession(nuevaSession);
+      setAuthRevisada(true);
       if (!nuevaSession) {
         setNubeLista(false);
         setEstadoNube("Guardado en este dispositivo");
@@ -565,7 +570,11 @@ export default function Home() {
     setProcesandoCuenta(true);
     setMensajeCuenta("");
     const { error } = accion === "crear"
-      ? await supabase.auth.signUp({ email: email.trim(), password })
+      ? await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { emailRedirectTo: window.location.origin },
+        })
       : await supabase.auth.signInWithPassword({ email: email.trim(), password });
     setProcesandoCuenta(false);
     if (error) {
@@ -869,6 +878,39 @@ export default function Home() {
     }
     setModalRevision(false);
     reiniciarImportacion();
+  }
+
+  if (!authRevisada) {
+    return (
+      <main className="login-shell login-loading" aria-live="polite">
+        <div className="login-brand"><span>MF</span><strong>Mis Finanzas</strong></div>
+        <p>Validando acceso seguro…</p>
+      </main>
+    );
+  }
+
+  if (!session) {
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <div className="login-brand"><span>MF</span><strong>Mis Finanzas</strong></div>
+          <div className="login-copy">
+            <span className="eyebrow">ACCESO SEGURO</span>
+            <h1>Controla tus finanzas desde cualquier dispositivo.</h1>
+            <p>Inicia sesión para consultar, registrar e importar tus movimientos. Tu información permanece privada y sincronizada.</p>
+          </div>
+          <form className="login-form" onSubmit={(e) => { e.preventDefault(); accederCuenta("ingresar"); }}>
+            <label>Correo electrónico<input autoFocus type="email" autoComplete="email" placeholder="nombre@correo.com" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+            <label>Contraseña<input type="password" autoComplete="current-password" minLength={6} placeholder="Mínimo 6 caracteres" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+            {mensajeCuenta && <p className="account-message">{mensajeCuenta}</p>}
+            <button className="save" disabled={procesandoCuenta}>{procesandoCuenta ? "Procesando…" : "Iniciar sesión"}</button>
+            <button type="button" className="create-account" disabled={procesandoCuenta} onClick={() => accederCuenta("crear")}>Crear una cuenta</button>
+          </form>
+          <small className="login-security">Acceso protegido mediante Supabase</small>
+        </section>
+        <aside className="login-visual" aria-hidden="true"><div><span>Saldo, gastos e ingresos</span><strong>Todo en un solo lugar.</strong><i /></div></aside>
+      </main>
+    );
   }
 
   return (
