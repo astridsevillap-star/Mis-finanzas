@@ -29,6 +29,7 @@ type Movimiento = {
   cuentaOrigen?: string;
   cuentaDestino?: string;
   claseTransferencia?: string;
+  excluirPresupuesto?: boolean;
 };
 type MovimientoImportado = Movimiento & { descartado?: boolean };
 type FilaExcel = Record<string, unknown>;
@@ -406,7 +407,8 @@ export default function Home() {
   const [filtroFuente, setFiltroFuente] = useState("Todas");
   const [filtroMes, setFiltroMes] = useState("Todos");
   const [filtroEmpresa, setFiltroEmpresa] = useState("Todas");
-  const [vista, setVista] = useState<"inicio" | "movimientos">("inicio");
+  const [vista, setVista] = useState<"inicio" | "movimientos" | "metas">("inicio");
+  const [excluirPresupuesto, setExcluirPresupuesto] = useState(false);
   const [busqueda, setBusqueda] = useState("");
   const [ocultar, setOcultar] = useState(false);
   const [cargado, setCargado] = useState(false);
@@ -452,6 +454,7 @@ export default function Home() {
             cuentaOrigen: movimiento.cuentaOrigen || (movimiento.tipo !== "ingreso" ? cuentaMovimiento(movimiento) : undefined),
             cuentaDestino: movimiento.cuentaDestino || (movimiento.tipo === "transferencia" ? movimiento.detalleFuente : movimiento.tipo === "ingreso" ? cuentaMovimiento(movimiento) : undefined),
             claseTransferencia: movimiento.claseTransferencia || (movimiento.tipo === "transferencia" ? "Entre cuentas propias" : undefined),
+            excluirPresupuesto: movimiento.excluirPresupuesto || false,
           })),
         );
       }
@@ -482,7 +485,7 @@ export default function Home() {
       setEstadoNube("Sincronizando con la nube…");
       const { data, error } = await supabase
         .from("movimientos")
-        .select("client_id,tipo,monto,concepto,categoria,fuente,detalle_fuente,fecha,empresa,subcategoria,empresa_origen,empresa_destino,cuenta_origen,cuenta_destino,clase_transferencia")
+        .select("client_id,tipo,monto,concepto,categoria,fuente,detalle_fuente,fecha,empresa,subcategoria,empresa_origen,empresa_destino,cuenta_origen,cuenta_destino,clase_transferencia,excluir_presupuesto")
         .order("fecha", { ascending: false });
       if (!activo) return;
       if (error) {
@@ -505,6 +508,7 @@ export default function Home() {
         cuentaOrigen: item.cuenta_origen || undefined,
         cuentaDestino: item.cuenta_destino || undefined,
         claseTransferencia: item.clase_transferencia || undefined,
+        excluirPresupuesto: item.excluir_presupuesto || false,
       }));
       setMovimientos((locales) => {
         const combinados = new Map<number, Movimiento>();
@@ -540,6 +544,7 @@ export default function Home() {
         cuenta_origen: item.cuentaOrigen || (item.tipo !== "ingreso" ? cuentaMovimiento(item) : null),
         cuenta_destino: item.cuentaDestino || (item.tipo === "transferencia" ? item.detalleFuente || null : item.tipo === "ingreso" ? cuentaMovimiento(item) : null),
         clase_transferencia: item.claseTransferencia || (item.tipo === "transferencia" ? "Entre cuentas propias" : null),
+        excluir_presupuesto: item.excluirPresupuesto || false,
         updated_at: new Date().toISOString(),
       }));
       const guardado = filas.length
@@ -571,6 +576,25 @@ export default function Home() {
     () => Array.from(new Set(movimientos.map((item) => item.fecha.slice(0, 7)))).sort().reverse(),
     [movimientos],
   );
+
+  const metaPasajes = useMemo(() => {
+    const mes = filtroMes === "Todos" ? mesesDisponibles[0] || hoy().slice(0, 7) : filtroMes;
+    const [anio, numeroMes] = mes.split("-").map(Number);
+    const ultimoDia = new Date(anio, numeroMes, 0).getDate();
+    let diasLaborables = 0;
+    for (let dia = 1; dia <= ultimoDia; dia += 1) {
+      const semana = new Date(anio, numeroMes - 1, dia).getDay();
+      if (semana >= 1 && semana <= 5) diasLaborables += 1;
+    }
+    const movimientosPasajes = movimientos.filter((item) => item.tipo === "gasto" && item.empresa === "Personal" && item.categoria === "Pasajes" && item.fecha.startsWith(mes));
+    const gastoComputable = movimientosPasajes.filter((item) => !item.excluirPresupuesto).reduce((total, item) => total + item.monto, 0);
+    const pagosEncargo = movimientosPasajes.filter((item) => item.excluirPresupuesto).reduce((total, item) => total + item.monto, 0);
+    const porDia = new Map<string, number>();
+    movimientosPasajes.filter((item) => !item.excluirPresupuesto).forEach((item) => porDia.set(item.fecha, (porDia.get(item.fecha) || 0) + item.monto));
+    const diasSobreMeta = Array.from(porDia.entries()).filter(([, total]) => total > 20).sort(([a], [b]) => b.localeCompare(a));
+    const presupuesto = diasLaborables * 20;
+    return { mes, diasLaborables, presupuesto, gastoComputable, pagosEncargo, disponible: presupuesto - gastoComputable, porcentaje: presupuesto ? (gastoComputable / presupuesto) * 100 : 0, diasSobreMeta, movimientosPasajes };
+  }, [movimientos, filtroMes, mesesDisponibles]);
 
   const resumen = useMemo(() => {
     const movimientosMes = filtroMes === "Todos"
@@ -715,6 +739,7 @@ export default function Home() {
         cuentaOrigen: esDevolucionJair ? "Préstamos a Jair" : tipo === "ingreso" ? undefined : tipo === "transferencia" ? cuentaOrigen : cuentaSeleccionada,
         cuentaDestino: esDevolucionJair ? cuentaSeleccionada : tipo === "gasto" ? undefined : tipo === "transferencia" ? cuentaDestino : cuentaSeleccionada,
         claseTransferencia: esDevolucionJair ? "Devolución de préstamo" : tipo === "transferencia" ? claseTransferencia : undefined,
+        excluirPresupuesto: tipo === "gasto" && categoria === "Pasajes" ? excluirPresupuesto : false,
       },
       ...anteriores,
     ]);
@@ -726,6 +751,7 @@ export default function Home() {
     setEmpresaOrigen("Personal");
     setEmpresaDestino("Personal");
     setClaseTransferencia("Entre cuentas propias");
+    setExcluirPresupuesto(false);
     setSubcategoria("Otros");
     setCategoriaIngreso("Sueldo");
     setFecha(hoy());
@@ -738,6 +764,10 @@ export default function Home() {
         anteriores.filter((movimiento) => movimiento.id !== id),
       );
     }
+  }
+
+  function alternarPresupuesto(id: number) {
+    setMovimientos((anteriores) => anteriores.map((movimiento) => movimiento.id === id ? { ...movimiento, excluirPresupuesto: !movimiento.excluirPresupuesto } : movimiento));
   }
 
   async function accederCuenta(accion: "ingresar" | "crear") {
@@ -1114,7 +1144,7 @@ export default function Home() {
           <button>
             ◔ <span>Presupuestos</span>
           </button>
-          <button>
+          <button className={vista === "metas" ? "active" : ""} onClick={() => setVista("metas")}>
             ◎ <span>Metas</span>
           </button>
           <button>
@@ -1134,11 +1164,11 @@ export default function Home() {
         <header>
           <div>
             <p className="eyebrow">DESDE EL 15 DE JUNIO</p>
-            <h1>{vista === "inicio" ? "Resumen de patrimonio" : "Movimientos por unidad"}</h1>
+            <h1>{vista === "inicio" ? "Resumen de patrimonio" : vista === "metas" ? "Metas financieras" : "Movimientos por unidad"}</h1>
             <p className="subtitle">
               {vista === "inicio"
                 ? "Personal, ahorro SIP y negocios claramente separados."
-                : "Consulta el detalle cuando lo necesites, sin recargar el panel principal."}
+                : vista === "metas" ? "Control mensual para tomar decisiones antes de exceder el presupuesto." : "Consulta el detalle cuando lo necesites, sin recargar el panel principal."}
             </p>
           </div>
           <div className="account-area">
@@ -1150,7 +1180,7 @@ export default function Home() {
         </header>
 
         <div className="scope-bar card">
-          <div><span>Unidad</span><select value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)}><option>Todas</option>{empresas.map((item) => <option key={item}>{item}</option>)}</select></div>
+          {vista !== "metas" && <div><span>Unidad</span><select value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)}><option>Todas</option>{empresas.map((item) => <option key={item}>{item}</option>)}</select></div>}
           <div><span>Periodo</span><select value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)}><option value="Todos">Todos los meses</option>{mesesDisponibles.map((mes) => <option key={mes} value={mes}>{new Date(`${mes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</option>)}</select></div>
           <button onClick={() => setModal(true)}>＋ Nuevo movimiento</button>
         </div>
@@ -1259,6 +1289,21 @@ export default function Home() {
           </article>
           </>}
 
+          {vista === "metas" && <article className="card goals-panel">
+            <div className="section-title"><div><span className="eyebrow">MOVILIDAD PERSONAL</span><h2>Presupuesto de pasajes</h2></div><span className="period">{new Date(`${metaPasajes.mes}-01T12:00:00`).toLocaleDateString("es-PE", { month: "long", year: "numeric" })}</span></div>
+            <div className="goal-overview">
+              <div><span>Presupuesto mensual</span><strong>{soles(metaPasajes.presupuesto)}</strong><small>S/20 × {metaPasajes.diasLaborables} días laborables</small></div>
+              <div><span>Gasto computable</span><strong className={metaPasajes.disponible >= 0 ? "ingreso" : "gasto"}>{soles(metaPasajes.gastoComputable)}</strong><small>{metaPasajes.porcentaje.toFixed(1)}% utilizado</small></div>
+              <div><span>{metaPasajes.disponible >= 0 ? "Disponible" : "Exceso"}</span><strong className={metaPasajes.disponible >= 0 ? "ingreso" : "gasto"}>{soles(Math.abs(metaPasajes.disponible))}</strong><small>Pagos por encargo excluidos: {soles(metaPasajes.pagosEncargo)}</small></div>
+            </div>
+            <div className="monthly-progress"><i className={metaPasajes.porcentaje > 100 ? "over" : ""} style={{ width: `${Math.min(100, metaPasajes.porcentaje)}%` }} /></div>
+            <p className="goal-rule">La referencia diaria es S/20, pero la evaluación principal se realiza contra el presupuesto total del mes. Los pagos hechos por encargo se conservan en el historial y no consumen esta meta.</p>
+            <div className="goal-columns">
+              <section><h3>Días sobre S/20</h3>{metaPasajes.diasSobreMeta.length ? metaPasajes.diasSobreMeta.map(([dia, total]) => <div key={dia}><span>{new Date(`${dia}T12:00:00`).toLocaleDateString("es-PE", { day: "2-digit", month: "short" })}</span><b>{soles(total)}</b></div>) : <p>No hay días por encima de la referencia.</p>}</section>
+              <section><h3>Movimientos de pasajes</h3>{metaPasajes.movimientosPasajes.length ? metaPasajes.movimientosPasajes.sort((a, b) => b.fecha.localeCompare(a.fecha)).map((movimiento) => <div key={movimiento.id} className={movimiento.excluirPresupuesto ? "excluded" : ""}><span>{new Date(`${movimiento.fecha}T12:00:00`).toLocaleDateString("es-PE", { day: "2-digit", month: "short" })} · {movimiento.concepto}</span><b>{soles(movimiento.monto)}</b><button onClick={() => alternarPresupuesto(movimiento.id)}>{movimiento.excluirPresupuesto ? "Incluir en meta" : "Pago por encargo"}</button></div>) : <p>No hay pasajes registrados en este mes.</p>}</section>
+            </div>
+          </article>}
+
           {vista === "movimientos" && <article className="card movements">
             <div className="section-title">
               <div>
@@ -1337,6 +1382,7 @@ export default function Home() {
                       {movimiento.tipo === "ingreso" ? "+" : movimiento.tipo === "gasto" ? "−" : ""}
                       {soles(movimiento.monto)}
                     </strong>
+                    {movimiento.tipo === "gasto" && movimiento.categoria === "Pasajes" && <button className={`budget-flag ${movimiento.excluirPresupuesto ? "active" : ""}`} onClick={() => alternarPresupuesto(movimiento.id)}>{movimiento.excluirPresupuesto ? "Por encargo" : "Excluir de meta"}</button>}
                     <button
                       className="delete"
                       aria-label="Eliminar"
@@ -1450,6 +1496,12 @@ export default function Home() {
                   <select value={subcategoria} onChange={(e) => setSubcategoria(e.target.value)}>
                     {subcategoriasExtras.map((item) => <option key={item}>{item}</option>)}
                   </select>
+                </label>
+              )}
+              {tipo === "gasto" && categoria === "Pasajes" && (
+                <label className="check-option">
+                  <input type="checkbox" checked={excluirPresupuesto} onChange={(e) => setExcluirPresupuesto(e.target.checked)} />
+                  <span><b>Pago por encargo o reembolsado</b><small>No se descontará de la meta mensual de pasajes.</small></span>
                 </label>
               )}
               <label>
