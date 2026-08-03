@@ -363,6 +363,25 @@ function esPrestamoJair(movimiento: Movimiento) {
   return movimiento.tipo === "gasto" && movimiento.categoria === "Extras" && sinAcentos(movimiento.concepto).includes("jair");
 }
 
+function normalizarDevolucionJair(movimiento: Movimiento): Movimiento {
+  const esDevolucionRegistrada = movimiento.tipo === "ingreso" && movimiento.fecha === "2026-07-03" && movimiento.monto === 500 && sinAcentos(movimiento.concepto).includes("jair");
+  if (!esDevolucionRegistrada) return movimiento;
+  const cuentaRecibida = movimiento.detalleFuente || cuentaMovimiento(movimiento) || "BCP";
+  return {
+    ...movimiento,
+    tipo: "transferencia",
+    categoria: "Devolución de préstamo",
+    fuente: "Préstamos a Jair",
+    detalleFuente: cuentaRecibida,
+    empresa: "Personal",
+    empresaOrigen: "Personal",
+    empresaDestino: "Personal",
+    cuentaOrigen: "Préstamos a Jair",
+    cuentaDestino: cuentaRecibida,
+    claseTransferencia: "Devolución de préstamo",
+  };
+}
+
 export default function Home() {
   const [movimientos, setMovimientos] = useState<Movimiento[]>(iniciales);
   const [modal, setModal] = useState(false);
@@ -422,7 +441,7 @@ export default function Home() {
           Otros: "Extras",
         };
         setMovimientos(
-          (JSON.parse(data) as Movimiento[]).map((movimiento) => ({
+          (JSON.parse(data) as Movimiento[]).map((movimiento) => normalizarDevolucionJair({
             ...movimiento,
             categoria: mapa[movimiento.categoria] || movimiento.categoria,
             fuente: movimiento.fuente || "Otro",
@@ -470,7 +489,7 @@ export default function Home() {
         setEstadoNube("No se pudo conectar con la nube");
         return;
       }
-      const remotos: Movimiento[] = (data || []).map((item) => ({
+      const remotos: Movimiento[] = (data || []).map((item) => normalizarDevolucionJair({
         id: Number(item.client_id),
         tipo: item.tipo as Tipo,
         monto: Number(item.monto),
